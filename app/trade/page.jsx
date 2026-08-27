@@ -28,6 +28,7 @@ function Trade() {
   const [price, setPrice] = useState("");
   const [qty, setQty] = useState("");
   const [tab, setTab] = useState("pos");
+  const [leverage, setLeverage] = useState(1);
   const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet();
   const [walletOpen, setWalletOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -52,8 +53,18 @@ function Trade() {
       }
       if (!fills.length) return a;
       let na = { ...a, openOrders: keep };
-      for (const o of fills) na = applyFill(na, o.sym, o.side, o.qty, o.price);
+      for (const o of fills) na = applyFill(na, o.sym, o.side, o.qty, o.price, o.leverage || 1);
       return na;
+    });
+  }, [prices]); // eslint-disable-line
+
+  // 청산 검사 (레버리지 포지션 가치가 부채 이하로 떨어지면 강제 청산)
+  useEffect(() => {
+    if (!acct.holdings || !Object.keys(acct.holdings).length) return;
+    setAcct((a) => {
+      const { wallet, changed, liquidated } = checkLiquidations(a, prices);
+      if (changed) setTimeout(() => toastMsg(`⚠️ 청산됨: ${liquidated.join(", ")}`), 0);
+      return changed ? wallet : a;
     });
   }, [prices]); // eslint-disable-line
 
@@ -75,20 +86,21 @@ function Trade() {
 
   const book = useMemo(() => genBook(p.px, coin.dec), [p.px, coin.dec]);
 
+  const lev = side === "buy" ? leverage : 1;
   function submit() {
     const q = parseFloat(qty), pr = parseFloat(price);
     if (!(q > 0)) return toastMsg("수량을 입력하세요");
     if (type === "limit" && !(pr > 0)) return toastMsg("가격을 입력하세요");
     const execPx = type === "market" ? p.px : pr;
-    if (side === "buy" && q * execPx > acct.cashUSDT + 1e-6) return toastMsg("주문가능 금액 부족");
+    if (side === "buy" && (q * execPx) / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
     if (side === "sell" && q > (acct.holdings[cur] || 0) + 1e-9) return toastMsg("보유수량 부족");
-    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx)); toastMsg(`시장가 ${side === "buy" ? "매수" : "매도"} 체결`); }
-    else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr }] })); toastMsg("지정가 주문 접수"); }
+    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, lev)); toastMsg(`시장가 ${side === "buy" ? "매수" : "매도"} 체결${side === "buy" && leverage > 1 ? ` (${leverage}x)` : ""}`); }
+    else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr, leverage: lev }] })); toastMsg("지정가 주문 접수"); }
     setQty("");
   }
   function cancel(id) { setAcct((a) => ({ ...a, openOrders: a.openOrders.filter((o) => o.id !== id) })); toastMsg("주문 취소"); }
   function setPct(pct) {
-    if (side === "buy") { const px = parseFloat(price) || p.px; if (px) setQty(((acct.cashUSDT * pct) / px).toFixed(coin.qdec)); }
+    if (side === "buy") { const px = parseFloat(price) || p.px; if (px) setQty(((acct.cashUSDT * leverage * pct) / px).toFixed(coin.qdec)); }
     else setQty(((acct.holdings[cur] || 0) * pct).toFixed(coin.qdec));
   }
 
@@ -174,6 +186,19 @@ function Trade() {
               <button onClick={() => setSide("buy")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "buy" ? "bg-up text-black border-up" : "bg-panel2 text-muted border-line"}`}>매수</button>
               <button onClick={() => setSide("sell")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "sell" ? "bg-down text-white border-down" : "bg-panel2 text-muted border-line"}`}>매도</button>
             </div>
+            {/* 레버리지 */}
+            <div className={`mb-2.5 ${side === "sell" ? "opacity-40 pointer-events-none" : ""}`}>
+              <div className="flex justify-between items-center mb-1.5">
+                <span className="text-[11px] text-muted">레버리지</span>
+                <span className="text-[11px] font-bold text-brand">{leverage}x</span>
+              </div>
+              <div className="flex gap-1 flex-wrap">
+                {[1, 2, 5, 10, 25, 50, 100, 125].map((L) => (
+                  <button key={L} onClick={() => setLeverage(L)}
+                    className={`flex-1 min-w-[38px] py-1 rounded-md text-[11px] font-bold border ${leverage === L ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{L}x</button>
+                ))}
+              </div>
+            </div>
             <Field label="종류">
               <select value={type} onChange={(e) => setType(e.target.value)} className="flex-1 px-2.5 py-2 bg-bg2 border border-line rounded-lg text-ink outline-none">
                 <option value="limit">지정가</option><option value="market">시장가</option>
@@ -191,8 +216,8 @@ function Trade() {
               {[0.25, 0.5, 0.75, 1].map((pct) => <button key={pct} onClick={() => setPct(pct)} className="flex-1 py-1 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">{pct * 100}%</button>)}
             </div>
             <div className="flex justify-between text-[11px] text-muted mb-2">
-              <span>주문가능</span>
-              <span className="tabnum">{side === "buy" ? "$" + acct.cashUSDT.toLocaleString("en-US", { maximumFractionDigits: 2 }) : (acct.holdings[cur] || 0).toFixed(coin.qdec) + " " + cur}</span>
+              <span>{side === "buy" ? `매수여력 (${leverage}x)` : "보유수량"}</span>
+              <span className="tabnum">{side === "buy" ? "$" + (acct.cashUSDT * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (acct.holdings[cur] || 0).toFixed(coin.qdec) + " " + cur}</span>
             </div>
             <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>{cur} {side === "buy" ? "매수" : "매도"}</button>
           </div>
@@ -294,17 +319,51 @@ function Stat({ label, val, cls = "", sub }) {
   );
 }
 
-function applyFill(a, sym, side, qty, price) {
-  const cost = qty * price;
-  const h = { ...a.holdings };
-  if (side === "buy") { h[sym] = (h[sym] || 0) + qty; }
-  else { h[sym] = (h[sym] || 0) - qty; if (h[sym] < 1e-9) delete h[sym]; }
-  return {
-    ...a,
-    cashUSDT: side === "buy" ? a.cashUSDT - cost : a.cashUSDT + cost,
-    holdings: h,
-    history: [{ sym, side, qty, price, t: Date.now() }, ...a.history].slice(0, 60),
-  };
+/** 격리 마진 체결: 매수는 마진만 차감하고 나머지는 차입, 매도는 비례 상환 후 정산 */
+function applyFill(a, sym, side, qty, price, leverage = 1) {
+  const h = { ...a.holdings }, b = { ...(a.borrowed || {}) }, e = { ...(a.entry || {}) };
+  const lev = Math.max(1, leverage || 1);
+  if (side === "buy") {
+    const notional = qty * price;
+    const margin = notional / lev;
+    const prevQty = h[sym] || 0, prevCost = (e[sym] || 0) * prevQty;
+    h[sym] = prevQty + qty;
+    e[sym] = h[sym] > 0 ? (prevCost + qty * price) / h[sym] : price;
+    b[sym] = (b[sym] || 0) + (notional - margin);
+    return {
+      ...a, cashUSDT: a.cashUSDT - margin, holdings: h, borrowed: b, entry: e,
+      history: [{ sym, side, qty, price, leverage: lev, t: Date.now() }, ...a.history].slice(0, 60),
+    };
+  } else {
+    const have = h[sym] || 0;
+    const q = Math.min(qty, have);
+    if (q <= 0) return a;
+    const frac = q / have;
+    const repay = (b[sym] || 0) * frac;
+    const proceeds = q * price;
+    h[sym] = have - q; b[sym] = (b[sym] || 0) - repay;
+    if (h[sym] < 1e-9) { delete h[sym]; delete b[sym]; delete e[sym]; }
+    return {
+      ...a, cashUSDT: a.cashUSDT + (proceeds - repay), holdings: h, borrowed: b, entry: e,
+      history: [{ sym, side, qty: q, price, t: Date.now() }, ...a.history].slice(0, 60),
+    };
+  }
+}
+
+/** 청산 검사: 포지션 가치 ≤ 부채면 강제 청산 */
+function checkLiquidations(a, prices) {
+  let changed = false, na = a, liquidated = [];
+  for (const sym of Object.keys(a.holdings || {})) {
+    const px = prices[sym]?.px;
+    if (px == null) continue;
+    const value = a.holdings[sym] * px;
+    const debt = (a.borrowed || {})[sym] || 0;
+    if (debt > 0 && value <= debt * 1.005) {   // 유지증거금 0.5%
+      na = applyFill(na, sym, "sell", na.holdings[sym], px, 1);
+      liquidated.push(sym); changed = true;
+    }
+  }
+  return { wallet: na, changed, liquidated };
 }
 function genBook(mid, dec) {
   if (!mid) return { asks: [], bids: [], max: 1 };
@@ -331,17 +390,33 @@ function Th({ children }) { return <th className="px-3 py-2 text-right text-mute
 function Td({ children, cls = "" }) { return <td className={`px-3 py-2 text-right first:text-left border-b border-line/50 ${cls}`}>{children}</td>; }
 
 function PosTable({ acct, prices }) {
-  const rows = Object.keys(acct.holdings);
+  const rows = Object.keys(acct.holdings || {});
+  const num = (v, d = 2) => v.toLocaleString("en-US", { maximumFractionDigits: d });
   return (
     <table className="w-full border-collapse text-xs">
-      <thead><tr><Th>자산</Th><Th>수량</Th><Th>평가액(USDT)</Th><Th>현재가</Th></tr></thead>
+      <thead><tr><Th>포지션</Th><Th>수량</Th><Th>진입가</Th><Th>현재가</Th><Th>레버리지</Th><Th>청산가</Th><Th>평가손익</Th></tr></thead>
       <tbody>
-        <tr><Td>USDT</Td><Td cls="tabnum">{acct.cashUSDT.toLocaleString("en-US", { maximumFractionDigits: 2 })}</Td><Td cls="tabnum">{acct.cashUSDT.toLocaleString("en-US", { maximumFractionDigits: 2 })}</Td><Td>-</Td></tr>
-        {rows.map((s) => (
-          <tr key={s}><Td>{s}</Td><Td cls="tabnum">{acct.holdings[s]}</Td>
-            <Td cls="tabnum">{(acct.holdings[s] * (prices[s]?.px || 0)).toLocaleString("en-US", { maximumFractionDigits: 2 })}</Td>
-            <Td cls="tabnum">{(prices[s]?.px || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</Td></tr>
-        ))}
+        <tr><Td>USDT <span className="text-muted2">(예수금)</span></Td><Td cls="tabnum">{num(acct.cashUSDT)}</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td></tr>
+        {rows.map((s) => {
+          const qty = acct.holdings[s], px = prices[s]?.px || 0;
+          const entry = (acct.entry || {})[s] || 0, debt = (acct.borrowed || {})[s] || 0;
+          const notional = qty * entry, margin = notional - debt;
+          const effLev = margin > 0 ? notional / margin : 1;
+          const liq = qty > 0 ? debt / qty : 0;
+          const pnl = qty * (px - entry);
+          const pnlPct = margin > 0 ? (pnl / margin) * 100 : 0;
+          return (
+            <tr key={s}>
+              <Td>{s}/USDT</Td>
+              <Td cls="tabnum">{num(qty, 6)}</Td>
+              <Td cls="tabnum">{num(entry)}</Td>
+              <Td cls="tabnum">{num(px)}</Td>
+              <Td cls="tabnum">{effLev >= 1.05 ? effLev.toFixed(0) + "x" : "1x"}</Td>
+              <Td cls="tabnum text-down">{debt > 0 ? num(liq) : "-"}</Td>
+              <Td cls={`tabnum font-bold ${pnl >= 0 ? "text-up" : "text-down"}`}>{pnl >= 0 ? "+" : ""}{num(pnl)} <span className="text-[10px]">({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)</span></Td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
