@@ -230,7 +230,7 @@ function Trade() {
 
 function WalletModal({ wallet, summary, onClose, onDeposit, onWithdraw, onReset }) {
   const [amt, setAmt] = useState("");
-  const quick = [10000, 50000, 100000, 1000000];
+  const quick = [100, 500, 1000, 5000];
   const v = parseInt(amt, 10) || 0;
   return (
     <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.75)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -256,7 +256,7 @@ function WalletModal({ wallet, summary, onClose, onDeposit, onWithdraw, onReset 
         <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0"
           className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand mb-2.5" />
         <div className="flex gap-1.5 mb-4">
-          {quick.map((q) => <button key={q} onClick={() => setAmt(String(q))} className="flex-1 py-1.5 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">+{(q / 1000)}K</button>)}
+          {quick.map((q) => <button key={q} onClick={() => setAmt(String(q))} className="flex-1 py-1.5 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">+${q.toLocaleString()}</button>)}
         </div>
         <div className="flex gap-2.5">
           <button onClick={() => { if (v > 0) { onDeposit(v); setAmt(""); } }} className="btn btn-primary flex-1 py-3 text-white">가상자금 충전</button>
