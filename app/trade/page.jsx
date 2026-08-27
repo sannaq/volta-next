@@ -96,9 +96,9 @@ function Trade() {
   const up = (p.chg ?? 0) >= 0;
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden text-[13px]">
+    <div className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden overflow-x-hidden text-[13px]">
       {/* top */}
-      <div className="h-14 flex items-center gap-5 px-4 bg-bg2 border-b border-line shrink-0">
+      <div className="min-h-14 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 lg:py-0 lg:h-14 lg:gap-5 lg:px-4 bg-bg2 border-b border-line shrink-0 sticky top-0 z-30">
         <Link href="/" className="flex items-center gap-2 font-extrabold text-lg">
           <span className="w-6 h-6 rounded-md bg-grad grid place-items-center font-black text-white text-xs">{brand.logoMark}</span>{brand.name}
         </Link>
@@ -113,8 +113,8 @@ function Trade() {
           <div><span className="text-muted mr-1">24h 저가</span><b>{fmt(p.lo)}</b></div>
           <div><span className="text-muted mr-1">연결</span><b className={connected ? "text-up" : "text-muted"}>{connected ? "실시간" : "폴백"}</b></div>
         </div>
-        <div className="ml-auto flex items-center gap-4 text-xs">
-          <span className="text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2.5 py-1">모의투자 · 가상머니</span>
+        <div className="ml-auto flex items-center gap-2.5 lg:gap-4 text-xs">
+          <span className="hidden sm:inline-block text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2.5 py-1">모의투자 · 가상머니</span>
           <div className="hidden md:block"><span className="text-muted mr-1.5">계정</span><b>{uid}</b></div>
           <div><span className="text-muted mr-1.5">평가자산</span><b className="tabnum">${equity.toLocaleString("en-US", { maximumFractionDigits: 2 })}</b></div>
           <div><span className="text-muted mr-1.5">수익률</span>
@@ -126,16 +126,16 @@ function Trade() {
       </div>
 
       {/* grid */}
-      <div className="flex-1 min-h-0 grid gap-2 p-2" style={{ gridTemplateColumns: "220px 1fr 300px", gridTemplateRows: "1fr 220px" }}>
+      <div className="flex-1 min-h-0 flex flex-col gap-2 p-2 lg:grid lg:grid-cols-[220px_1fr_300px] lg:grid-rows-[1fr_220px]">
         {/* markets */}
-        <div className="card !rounded-xl overflow-hidden flex flex-col" style={{ gridRow: "1 / span 2" }}>
-          <h3 className="text-[11px] text-muted font-bold uppercase px-3 py-2.5 border-b border-line">마켓</h3>
-          <div className="overflow-auto">
+        <div className="card !rounded-xl overflow-hidden flex flex-col lg:row-span-2 shrink-0">
+          <h3 className="hidden lg:block text-[11px] text-muted font-bold uppercase px-3 py-2.5 border-b border-line">마켓</h3>
+          <div className="flex lg:block overflow-x-auto lg:overflow-auto">
             {brand.coins.map((c) => {
               const cp = prices[c.sym] || {}; const cu = (cp.chg ?? 0) >= 0;
               return (
                 <div key={c.sym} onClick={() => setCur(c.sym)}
-                  className={`flex items-center gap-2 px-3 py-2.5 border-b border-line/50 cursor-pointer hover:bg-panel2 ${c.sym === cur ? "bg-[rgba(91,140,255,.08)] shadow-[inset_3px_0_0_var(--brand)]" : ""}`}>
+                  className={`flex items-center gap-2 px-3 py-2.5 border-line/50 cursor-pointer hover:bg-panel2 shrink-0 min-w-[160px] border-r lg:min-w-0 lg:border-r-0 lg:border-b ${c.sym === cur ? "bg-[rgba(20,184,166,.10)] shadow-[inset_0_-3px_0_var(--brand)] lg:shadow-[inset_3px_0_0_var(--brand)]" : ""}`}>
                   <span className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-extrabold text-white shrink-0" style={{ background: c.color }}>{c.sym.slice(0, 2)}</span>
                   <div><div className="font-semibold">{c.sym}<span className="text-muted2">/USDT</span></div><div className="text-[10px] text-muted2">{c.name}</div></div>
                   <div className="ml-auto text-right">
@@ -149,8 +149,8 @@ function Trade() {
         </div>
 
         {/* chart */}
-        <div className="card !rounded-xl overflow-hidden flex flex-col">
-          <div className="flex gap-1.5 px-3 py-2 border-b border-line">
+        <div className="card !rounded-xl overflow-hidden flex flex-col h-[300px] lg:h-auto shrink-0 min-h-0">
+          <div className="flex gap-1.5 px-3 py-2 border-b border-line overflow-x-auto">
             {TF.map(([v, l]) => (
               <button key={v} onClick={() => setTf(v)}
                 className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border ${tf === v ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
@@ -160,9 +160,9 @@ function Trade() {
         </div>
 
         {/* orderbook + form */}
-        <div className="card !rounded-xl overflow-hidden flex flex-col">
+        <div className="card !rounded-xl overflow-hidden flex flex-col shrink-0 lg:min-h-0">
           <h3 className="text-[11px] text-muted font-bold uppercase px-3 py-2.5 border-b border-line">호가</h3>
-          <div className="flex-1 overflow-hidden text-xs">
+          <div className="flex-1 overflow-auto max-h-[240px] lg:max-h-none text-xs">
             {book.asks.map((a, i) => <BookRow key={"a" + i} row={a} kind="ask" max={book.max} fmt={fmt} onClick={() => setPrice(a.p.toFixed(coin.dec))} />)}
             <div className="px-3 py-1.5 text-base font-extrabold border-y border-line flex items-center gap-2">
               <span className={up ? "text-up" : "text-down"}>{fmt(p.px)}</span>
@@ -199,7 +199,7 @@ function Trade() {
         </div>
 
         {/* bottom */}
-        <div className="card !rounded-xl overflow-hidden flex flex-col" style={{ gridColumn: "2 / span 2" }}>
+        <div className="card !rounded-xl overflow-hidden flex flex-col lg:col-span-2 h-[260px] lg:h-auto shrink-0">
           <div className="flex gap-1 px-3 pt-2">
             {[["pos", "보유자산"], ["open", "미체결"], ["hist", "체결내역"]].map(([v, l]) => (
               <button key={v} onClick={() => setTab(v)} className={`px-3 py-1.5 rounded-md text-xs font-semibold ${tab === v ? "bg-panel2 text-ink" : "text-muted"}`}>{l}</button>
