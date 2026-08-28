@@ -32,6 +32,7 @@ function Trade() {
   const [sl, setSl] = useState("");           // 손절가
   const [recentTrades, setRecentTrades] = useState([]);
   const [equitySeries, setEquitySeries] = useState([]);
+  const [view, setView] = useState("trade");   // trade | history | mypage
   const [tab, setTab] = useState("pos");
   const [leverage, setLeverage] = useState(1);
   const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet();
@@ -178,17 +179,28 @@ function Trade() {
         <Link href="/" className="flex items-center gap-2 font-extrabold text-lg">
           <span className="w-6 h-6 rounded-md bg-grad grid place-items-center font-black text-white text-xs">{brand.logoMark}</span>{brand.name}
         </Link>
-        <div className="flex items-center gap-2.5 px-3 py-1.5 bg-panel border border-line rounded-[10px]">
-          <span className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-extrabold text-white" style={{ background: coin.color }}>{cur.slice(0, 2)}</span>
-          <span className="font-bold text-[15px]">{cur}/USDT</span>
-          <span className={`font-bold ${up ? "text-up" : "text-down"}`}>{fmt(p.px)}</span>
-          <span className={`text-xs ${up ? "text-up" : "text-down"}`}>{up ? "+" : ""}{(p.chg ?? 0).toFixed(2)}%</span>
-        </div>
-        <div className="hidden lg:flex gap-5 text-xs">
-          <div><span className="text-muted mr-1">24h 고가</span><b>{fmt(p.hi)}</b></div>
-          <div><span className="text-muted mr-1">24h 저가</span><b>{fmt(p.lo)}</b></div>
-          <div><span className="text-muted mr-1">연결</span><b className={connected ? "text-up" : "text-muted"}>{connected ? "실시간" : "폴백"}</b></div>
-        </div>
+        {/* 상단 네비게이션 탭 */}
+        <nav className="flex items-center gap-1">
+          {[["trade", "투자"], ["history", "거래 내역"], ["mypage", "마이페이지"]].map(([v, l]) => (
+            <button key={v} onClick={() => setView(v)}
+              className={`px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition ${view === v ? "bg-panel2 text-ink" : "text-muted hover:text-ink"}`}>{l}</button>
+          ))}
+        </nav>
+        {view === "trade" && (
+          <div className="flex items-center gap-2.5 px-3 py-1.5 bg-panel border border-line rounded-[10px]">
+            <span className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-extrabold text-white" style={{ background: coin.color }}>{cur.slice(0, 2)}</span>
+            <span className="font-bold text-[15px]">{cur}/USDT</span>
+            <span className={`font-bold ${up ? "text-up" : "text-down"}`}>{fmt(p.px)}</span>
+            <span className={`text-xs ${up ? "text-up" : "text-down"}`}>{up ? "+" : ""}{(p.chg ?? 0).toFixed(2)}%</span>
+          </div>
+        )}
+        {view === "trade" && (
+          <div className="hidden lg:flex gap-5 text-xs">
+            <div><span className="text-muted mr-1">24h 고가</span><b>{fmt(p.hi)}</b></div>
+            <div><span className="text-muted mr-1">24h 저가</span><b>{fmt(p.lo)}</b></div>
+            <div><span className="text-muted mr-1">연결</span><b className={connected ? "text-up" : "text-muted"}>{connected ? "실시간" : "폴백"}</b></div>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-2.5 lg:gap-4 text-xs">
           <span className="hidden sm:inline-block text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2.5 py-1">모의투자 · 가상머니</span>
           <div className="hidden md:block"><span className="text-muted mr-1.5">계정</span><b>{uid}</b></div>
@@ -201,7 +213,8 @@ function Trade() {
         </div>
       </div>
 
-      {/* grid */}
+      {/* 투자 (거래 그리드) */}
+      {view === "trade" && (
       <div className="flex-1 min-h-0 flex flex-col gap-2 p-2 lg:grid lg:grid-cols-[220px_1fr_300px] lg:grid-rows-[1fr_220px]">
         {/* markets */}
         <div className="card !rounded-xl overflow-hidden flex flex-col lg:row-span-2 shrink-0">
@@ -339,6 +352,27 @@ function Trade() {
           </div>
         </div>
       </div>
+      )}
+
+      {/* 거래 내역 */}
+      {view === "history" && (
+        <div className="flex-1 min-h-0 overflow-auto p-3 lg:p-6">
+          <div className="max-w-[1100px] mx-auto card !rounded-xl overflow-hidden">
+            <h2 className="text-sm font-bold px-5 py-3 border-b border-line">거래 내역</h2>
+            <HistTable acct={acct} />
+          </div>
+        </div>
+      )}
+
+      {/* 마이페이지 */}
+      {view === "mypage" && (
+        <div className="flex-1 min-h-0 overflow-auto p-3 lg:p-6">
+          <MyPageView acct={acct} summary={summary} series={equitySeries} uid={uid}
+            onDeposit={(v) => { deposit(v); toastMsg(`가상자금 ${v.toLocaleString()} USDT 충전`); }}
+            onWithdraw={(v) => { withdraw(v); toastMsg(`가상자금 ${v.toLocaleString()} USDT 출금`); }}
+            onReset={() => { reset(); toastMsg("모의투자 계좌 초기화"); }} />
+        </div>
+      )}
 
       <div className={`fixed right-5 bottom-5 bg-[#1e2333] border border-line text-white px-4 py-2.5 rounded-[10px] text-[13px] transition ${toast ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"}`}>{toast}</div>
 
@@ -417,6 +451,87 @@ function Stat({ label, val, cls = "", sub }) {
     <div className="bg-[rgba(255,255,255,.03)] border border-line rounded-xl px-3.5 py-3">
       <div className="text-muted text-[11px] mb-1">{label}</div>
       <div className={`font-bold tabnum ${cls}`}>{val}{sub && <span className="text-[11px] ml-1.5">{sub}</span>}</div>
+    </div>
+  );
+}
+
+function MyPageView({ acct, summary, series, uid, onDeposit, onWithdraw, onReset }) {
+  const [amt, setAmt] = useState("");
+  const quick = [100, 500, 1000, 5000];
+  const v = parseInt(amt, 10) || 0;
+  const up = summary.pnl >= 0;
+  const num = (n, d = 2) => (n ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
+  const realized = acct.realizedPnL || 0;
+  const openPositions = Object.keys(acct.positions || {}).length;
+  const trades = (acct.history || []).length;
+  return (
+    <div className="max-w-[1100px] mx-auto grid lg:grid-cols-[1.3fr_1fr] gap-4">
+      {/* 좌: 계정 + 요약 + 자산추이 */}
+      <div className="flex flex-col gap-4">
+        <div className="card !rounded-xl p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="w-12 h-12 rounded-full bg-grad grid place-items-center font-black text-white text-lg">{(uid || "G").slice(0, 1).toUpperCase()}</span>
+            <div>
+              <div className="font-bold text-lg">{uid}</div>
+              <div className="text-muted2 text-xs">모의투자 계정 · 가상머니</div>
+            </div>
+            <span className="ml-auto text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2.5 py-1">MOCK</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+            <Stat label="평가자산" val={"$" + num(summary.equity)} />
+            <Stat label="가상 예수금" val={"$" + num(acct.cashUSDT)} />
+            <Stat label="투입원금" val={"$" + num(summary.principal, 0)} />
+            <Stat label="미실현손익" val={(summary.upnl >= 0 ? "+$" : "-$") + num(Math.abs(summary.upnl))} cls={summary.upnl >= 0 ? "text-up" : "text-down"} />
+            <Stat label="실현손익" val={(realized >= 0 ? "+$" : "-$") + num(Math.abs(realized))} cls={realized >= 0 ? "text-up" : "text-down"} />
+            <Stat label="총 수익률" val={(up ? "+" : "") + summary.roi.toFixed(2) + "%"} cls={up ? "text-up" : "text-down"} />
+          </div>
+          <div className="flex gap-5 mt-3 text-xs text-muted">
+            <span>보유 포지션 <b className="text-ink">{openPositions}</b></span>
+            <span>누적 거래 <b className="text-ink">{trades}</b></span>
+          </div>
+        </div>
+        <div className="card !rounded-xl p-1">
+          <h3 className="text-sm font-bold px-4 pt-3">자산 추이</h3>
+          <EquityCurve series={series} summary={summary} />
+        </div>
+      </div>
+
+      {/* 우: 가상 지갑 */}
+      <div className="card !rounded-xl p-5 h-fit">
+        <div className="flex items-center gap-2 mb-1">
+          <h3 className="text-base font-extrabold">가상 지갑</h3>
+          <span className="text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2 py-0.5">가짜돈</span>
+        </div>
+        <p className="text-muted2 text-xs mb-4">실제 결제·입금이 아닙니다. 모의투자용 가상 USDT입니다.</p>
+        <label className="block text-[13px] text-muted mb-1.5">금액 (USDT)</label>
+        <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0"
+          className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand mb-2.5" />
+        <div className="flex gap-1.5 mb-4">
+          {quick.map((q) => <button key={q} onClick={() => setAmt(String(q))} className="flex-1 py-1.5 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">+${q.toLocaleString()}</button>)}
+        </div>
+        <div className="flex gap-2.5">
+          <button onClick={() => { if (v > 0) { onDeposit(v); setAmt(""); } }} className="btn btn-primary flex-1 py-3 text-white">충전</button>
+          <button onClick={() => { if (v > 0) { onWithdraw(v); setAmt(""); } }} className="btn btn-ghost flex-1 py-3">출금</button>
+        </div>
+        <button onClick={onReset} className="w-full mt-2.5 py-2.5 rounded-[10px] border border-down/40 text-down bg-down/5 text-[13px] font-semibold hover:bg-down/10">계좌 초기화</button>
+
+        {acct.ledger?.length > 0 && (
+          <div className="mt-5">
+            <div className="text-[11px] text-muted font-bold uppercase mb-2">입출금 내역</div>
+            <div className="max-h-[180px] overflow-auto flex flex-col gap-1">
+              {acct.ledger.slice(0, 30).map((l, i) => (
+                <div key={i} className="flex justify-between text-xs py-1 border-b border-line/40">
+                  <span className={l.type === "deposit" ? "text-up" : l.type === "withdraw" ? "text-down" : "text-muted"}>
+                    {l.type === "deposit" ? "충전" : l.type === "withdraw" ? "출금" : "초기화"}
+                  </span>
+                  <span className="tabnum">{l.type === "withdraw" ? "-" : "+"}${l.amt.toLocaleString()}</span>
+                  <span className="text-muted2">{new Date(l.t).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
