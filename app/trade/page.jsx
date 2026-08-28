@@ -768,6 +768,7 @@ function MyPageView({ acct, summary, series, uid, isAdmin }) {
 
 function MemberRoster({ meId }) {
   const [wallets, setWallets] = useState([]);
+  const [detail, setDetail] = useState(null);
   useEffect(() => {
     if (!supabaseEnabled) return;
     let alive = true;
@@ -816,7 +817,7 @@ function MemberRoster({ meId }) {
               {wallets.map((w) => {
                 const d = w.data || {}; const rp = d.realizedPnL || 0; const me = w.username === meId;
                 return (
-                  <tr key={w.username} className="border-b border-line/40">
+                  <tr key={w.username} onClick={() => setDetail(w)} className="border-b border-line/40 cursor-pointer hover:bg-panel2">
                     <td className="px-4 py-2.5 font-semibold">{w.username}{me && <span className="text-brand text-[10px] ml-1">(나)</span>}</td>
                     <td className="px-4 py-2.5 text-right">{me ? <span className="text-brand font-bold">관리자</span> : <span className="text-muted">회원</span>}</td>
                     <td className="px-4 py-2.5 text-right tabnum">{money(d.cashUSDT)}</td>
@@ -830,6 +831,85 @@ function MemberRoster({ meId }) {
           </table>
         </div>
       )}
+      {detail && <MemberDetailModal wallet={detail} meId={meId} onClose={() => setDetail(null)} />}
+    </div>
+  );
+}
+
+function MemberDetailModal({ wallet, meId, onClose }) {
+  const d = wallet.data || {};
+  const me = wallet.username === meId;
+  const num = (v, dc = 2) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: dc });
+  const positions = d.positions || {};
+  const posKeys = Object.keys(positions);
+  const history = d.history || [];
+  const rp = d.realizedPnL || 0;
+  const label = (h) => h.kind === "liquidation" ? "강제청산" : h.kind === "tp" ? "익절" : h.kind === "sl" ? "손절" : (h.realized != null ? "청산" : "진입");
+  return (
+    <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.8)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="card !rounded-2xl w-full max-w-[760px] max-h-[86vh] overflow-hidden flex flex-col">
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-line">
+          <span className="w-8 h-8 rounded-full bg-grad grid place-items-center font-black text-white text-xs">{(wallet.username || "?").slice(0, 1).toUpperCase()}</span>
+          <h3 className="text-base font-extrabold">{wallet.username}</h3>
+          {me ? <span className="text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2 py-0.5">관리자</span> : <span className="text-[10px] text-muted border border-line rounded-full px-2 py-0.5">회원</span>}
+          <button className="ml-auto text-2xl text-muted" onClick={onClose}>×</button>
+        </div>
+        <div className="overflow-auto p-5">
+          {/* 요약 */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
+            <Stat label="가상 예수금" val={"$" + num(d.cashUSDT)} />
+            <Stat label="투입원금" val={"$" + num(d.principal, 0)} />
+            <Stat label="실현손익" val={(rp >= 0 ? "+$" : "-$") + num(Math.abs(rp))} cls={rp >= 0 ? "text-up" : "text-down"} />
+            <Stat label="보유 포지션" val={posKeys.length + "개"} />
+          </div>
+
+          {/* 현재 포지션 */}
+          {posKeys.length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-bold text-muted mb-2">보유 포지션</div>
+              <div className="flex flex-wrap gap-1.5">
+                {posKeys.map((s) => {
+                  const x = positions[s];
+                  const effLev = x.margin > 0 ? Math.round((x.qty * x.entry) / x.margin) : 1;
+                  return <span key={s} className={`text-[11px] px-2 py-1 rounded-md border border-line ${x.side === "long" ? "text-up" : "text-down"}`}>{s} {x.side === "long" ? "롱" : "숏"} {effLev}x · {(+x.qty).toFixed(4)} @ {num(x.entry)}</span>;
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 거래 내역 */}
+          <div className="text-xs font-bold text-muted mb-2">거래 내역 <span className="text-muted2 font-normal">({history.length}건)</span></div>
+          {history.length === 0 ? (
+            <div className="text-center text-muted2 py-6 text-xs">거래 내역이 없습니다.</div>
+          ) : (
+            <div className="overflow-auto max-h-[42vh] border border-line rounded-lg">
+              <table className="w-full border-collapse text-xs">
+                <thead>
+                  <tr className="text-muted">
+                    {["시간", "마켓", "구분", "방향", "가격", "수량", "레버리지", "실현손익"].map((h) => (
+                      <th key={h} className="px-3 py-2 text-right first:text-left sticky top-0 bg-panel font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h, i) => (
+                    <tr key={i} className="border-b border-line/40">
+                      <td className="px-3 py-2 text-muted">{new Date(h.t).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+                      <td className="px-3 py-2">{h.sym}/USDT</td>
+                      <td className={`px-3 py-2 ${h.kind === "liquidation" ? "text-down font-bold" : h.side === "buy" ? "text-up" : "text-down"}`}>{label(h)}</td>
+                      <td className={`px-3 py-2 text-right ${h.dir === "long" ? "text-up" : "text-down"}`}>{h.dir === "long" ? "롱" : h.dir === "short" ? "숏" : "-"}</td>
+                      <td className="px-3 py-2 text-right tabnum">{num(h.price, 4)}</td>
+                      <td className="px-3 py-2 text-right tabnum">{num(h.qty, 6)}</td>
+                      <td className="px-3 py-2 text-right tabnum">{h.leverage ? h.leverage + "x" : "-"}</td>
+                      <td className={`px-3 py-2 text-right tabnum font-bold ${h.realized == null ? "text-muted2" : h.realized >= 0 ? "text-up" : "text-down"}`}>{h.realized == null ? "-" : (h.realized >= 0 ? "+$" : "-$") + num(Math.abs(h.realized))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
