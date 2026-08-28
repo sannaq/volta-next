@@ -24,7 +24,7 @@ function Trade() {
   const [cur, setCur] = useState(sp.get("sym") || "BTC");
   const [side, setSide] = useState("buy");
   const [tf, setTf] = useState("1");
-  const [type, setType] = useState("limit");
+  const [type, setType] = useState("market");   // 기본 시장가
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");   // 주문 금액(USDT, 명목가치)
   const [trigger, setTrigger] = useState(""); // 조건부(스톱) 트리거 가격
@@ -42,8 +42,8 @@ function Trade() {
   const p = prices[cur] || {};
   const uid = sp.get("id") || "guest";
 
-  // keep limit price synced to live px when switching symbol
-  useEffect(() => { if (p.px && type === "limit") setPrice(p.px.toFixed(coin.dec)); /* eslint-disable-next-line */ }, [cur]);
+  // keep limit price synced to live px when switching symbol / order type
+  useEffect(() => { if (p.px && type === "limit") setPrice(p.px.toFixed(coin.dec)); /* eslint-disable-next-line */ }, [cur, type]);
 
   // 미체결 처리: 지정가 체결 + 조건부(스톱) 트리거
   useEffect(() => {
@@ -265,11 +265,12 @@ function Trade() {
                 ))}
               </div>
             </div>
-            <Field label="종류">
-              <select value={type} onChange={(e) => setType(e.target.value)} className="flex-1 px-2.5 py-2 bg-bg2 border border-line rounded-lg text-ink outline-none">
-                <option value="limit">지정가</option><option value="market">시장가</option><option value="stop">조건부(스톱)</option>
-              </select>
-            </Field>
+            <div className="flex gap-1 mb-2">
+              {[["market", "시장가"], ["limit", "지정가"], ["stop", "조건부"]].map(([v, l]) => (
+                <button key={v} onClick={() => setType(v)}
+                  className={`flex-1 py-1.5 rounded-md text-[12px] font-semibold border ${type === v ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
+              ))}
+            </div>
             {type === "limit" && (
               <Field label="가격">
                 <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="지정가"
