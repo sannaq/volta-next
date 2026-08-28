@@ -1,6 +1,6 @@
 "use client";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { brand } from "@/lib/brand.config";
 import { useBinanceStream } from "@/lib/useBinanceStream";
@@ -16,12 +16,27 @@ const TF = [["1", "1m"], ["5", "5m"], ["15", "15m"], ["60", "1H"], ["240", "4H"]
 export default function TradePage() {
   return (
     <Suspense fallback={<div className="h-screen grid place-items-center text-muted">로딩…</div>}>
-      <Trade />
+      <TradeGuard />
     </Suspense>
   );
 }
 
-function Trade() {
+// 로그인 가드: 세션(로그인 시에만 설정됨)이 없으면 랜딩으로. URL 조작으로는 들어갈 수 없음.
+function TradeGuard() {
+  const router = useRouter();
+  const [sid, setSid] = useState(undefined); // undefined=확인중, null=미로그인
+  useEffect(() => {
+    let s = null;
+    try { s = localStorage.getItem("volta_session"); } catch (_) {}
+    if (!s) { router.replace("/"); setSid(null); return; }
+    setSid(s);
+  }, []); // eslint-disable-line
+  if (sid === undefined) return <div className="h-screen grid place-items-center text-muted">확인 중…</div>;
+  if (sid === null) return <div className="h-screen grid place-items-center text-muted">로그인이 필요합니다…</div>;
+  return <Trade sessionUid={sid} />;
+}
+
+function Trade({ sessionUid }) {
   const sp = useSearchParams();
   const { prices, connected } = useBinanceStream();
   const [cur, setCur] = useState(sp.get("sym") || "BTC");
@@ -45,13 +60,13 @@ function Trade() {
   const [pnlCard, setPnlCard] = useState(null); // 공유 카드용 포지션
   const [tab, setTab] = useState("pos");
   const [leverage, setLeverage] = useState(1);
-  const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet(sp.get("id") || "guest");
+  const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet(sessionUid);
   const [walletOpen, setWalletOpen] = useState(false);
   const [toast, setToast] = useState("");
 
   const coin = useMemo(() => brand.coins.find((c) => c.sym === cur) || brand.coins[0], [cur]);
   const p = prices[cur] || {};
-  const uid = sp.get("id") || "guest";
+  const uid = sessionUid;
 
   // keep limit price synced to live px when switching symbol / order type
   useEffect(() => { if (p.px && type === "limit") setPrice(p.px.toFixed(coin.dec)); /* eslint-disable-next-line */ }, [cur, type]);
@@ -312,7 +327,7 @@ function Trade() {
             <b className={`tabnum ${summary.pnl >= 0 ? "text-up" : "text-down"}`}>{summary.pnl >= 0 ? "+" : ""}{summary.roi.toFixed(2)}%</b>
           </div>
           <button className="btn btn-primary px-3 py-1.5 text-white" onClick={() => setWalletOpen(true)}>지갑</button>
-          <Link href="/" className="btn btn-ghost px-3 py-1.5">로그아웃</Link>
+          <button onClick={() => { try { localStorage.removeItem("volta_session"); } catch (_) {} window.location.href = "/"; }} className="btn btn-ghost px-3 py-1.5">로그아웃</button>
         </div>
       </div>
 

@@ -189,7 +189,7 @@ export default function Landing() {
       </footer>
 
       {modal && <AuthModal mode={modal} onClose={() => setModal(null)} onSwitch={setModal}
-        onDone={(id) => router.push("/trade?id=" + encodeURIComponent(id))} />}
+        onDone={(id) => { try { localStorage.setItem("volta_session", id); } catch (_) {} router.push("/trade?id=" + encodeURIComponent(id)); }} />}
     </main>
   );
 }
