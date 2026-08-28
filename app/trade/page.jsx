@@ -34,6 +34,7 @@ function Trade() {
   const [equitySeries, setEquitySeries] = useState([]);
   const [view, setView] = useState("trade");   // trade | history | mypage
   const [marginMode, setMarginMode] = useState("isolated"); // isolated | cross
+  const [levText, setLevText] = useState("1"); // 레버리지 입력창(자유 타이핑용)
   const [funding, setFunding] = useState({});  // sym → 펀딩비율(%)
   const [fundingIn, setFundingIn] = useState(60);
   const [alerts, setAlerts] = useState([]);    // {id, sym, price, above}
@@ -127,6 +128,9 @@ function Trade() {
     const id = setInterval(() => setEquitySeries((prev) => [...prev, { t: Date.now(), e: trackRef.current.equity }].slice(-120)), 2000);
     return () => clearInterval(id);
   }, []);
+
+  // 슬라이더/프리셋으로 레버리지 변경 시 입력창 텍스트 동기화
+  useEffect(() => { setLevText(String(leverage)); }, [leverage]);
 
   // 펀딩비 초기화 (클라이언트, -0.03%~+0.03%)
   useEffect(() => {
@@ -344,8 +348,13 @@ function Trade() {
               <div className="flex justify-between items-center mb-1">
                 <span className="text-[11px] text-muted">레버리지</span>
                 <div className="flex items-center gap-1">
-                  <input type="number" min="1" max="125" value={leverage}
-                    onChange={(e) => { const n = Math.max(1, Math.min(125, Math.round(+e.target.value || 1))); setLeverage(n); }}
+                  <input type="number" min="1" max="125" value={levText}
+                    onChange={(e) => {
+                      setLevText(e.target.value);
+                      const n = Math.round(+e.target.value);
+                      if (!isNaN(n) && n >= 1 && n <= 125) setLeverage(n);
+                    }}
+                    onBlur={() => { const n = Math.max(1, Math.min(125, Math.round(+levText) || 1)); setLeverage(n); setLevText(String(n)); }}
                     className="w-12 px-1.5 py-0.5 bg-bg2 border border-line rounded text-ink text-[11px] font-bold text-right outline-none focus:border-brand" />
                   <span className="text-[11px] font-bold text-brand">x</span>
                 </div>
