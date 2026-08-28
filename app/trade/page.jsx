@@ -242,6 +242,21 @@ function Trade() {
     const c = brand.coins.find((x) => x.sym === sym) || {};
     setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, color: c.color, dec: c.dec ?? 2 });
   }
+  function openHistoryCard(rec) {
+    const c = brand.coins.find((x) => x.sym === rec.sym) || {};
+    const dec = c.dec ?? 2;
+    if (rec.reduce) {
+      // 청산/익절/손절 기록 → 실현 결과 카드
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.entry ?? rec.price, mark: rec.price, roe: rec.roe ?? 0, lev: rec.lev ?? 1, color: c.color, dec, closed: true });
+    } else {
+      // 진입 기록 → 현재가 기준 실시간 결과
+      const live = prices[rec.sym]?.px ?? rec.price;
+      const pnl = (rec.dir === "long" ? (live - rec.price) : (rec.price - live)) * rec.qty;
+      const margin = (rec.qty * rec.price) / (rec.leverage || 1);
+      const roe = margin > 0 ? (pnl / margin) * 100 : 0;
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.price, mark: live, roe, lev: rec.leverage || 1, color: c.color, dec, closed: false });
+    }
+  }
   function setPct(pct) {
     const px = parseFloat(price) || p.px; if (!px) return;
     // 진입: 명목 = 주문여력 × 레버리지 × %  /  청산: 포지션 명목 × %
@@ -470,7 +485,7 @@ function Trade() {
           <div className="flex-1 overflow-auto">
             {tab === "pos" && <PosTable acct={acct} prices={prices} summary={summary} onClose={closePosition} onShare={openShare} />}
             {tab === "open" && <OpenTable acct={acct} onCancel={cancel} />}
-            {tab === "hist" && <HistTable acct={acct} />}
+            {tab === "hist" && <HistTable acct={acct} onRow={openHistoryCard} />}
             {tab === "tape" && <TradeTape trades={recentTrades} sym={cur} dec={coin.dec} />}
             {tab === "equity" && <EquityCurve series={equitySeries} summary={summary} />}
           </div>
@@ -483,7 +498,7 @@ function Trade() {
         <div className="flex-1 min-h-0 overflow-auto p-3 lg:p-6">
           <div className="max-w-[1100px] mx-auto card !rounded-xl overflow-hidden">
             <h2 className="text-sm font-bold px-5 py-3 border-b border-line">거래 내역</h2>
-            <HistTable acct={acct} />
+            <HistTable acct={acct} onRow={openHistoryCard} />
           </div>
         </div>
       )}
@@ -577,24 +592,38 @@ function PnLCardModal({ card, uid, onClose }) {
   const roeStr = (up ? "+" : "") + card.roe.toFixed(2) + "%";
   const dec = card.dec ?? 2;
   const fmt = (v) => v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
-  const sideKr = card.side === "long" ? "롱 LONG" : "숏 SHORT";
-  const W = 800, H = 450;
+  const sideKr = card.side === "long" ? "LONG 롱" : "SHORT 숏";
+  const sideCol = card.side === "long" ? "#22c55e" : "#f87171";
+  const priceLabel = card.closed ? "청산가" : "현재가";
+  const W = 640, H = 640;
+  const chev = up
+    ? `<polyline points="452,300 536,224 620,300"/><polyline points="452,372 536,296 620,372"/><polyline points="452,444 536,368 620,444"/>`
+    : `<polyline points="452,224 536,300 620,224"/><polyline points="452,296 536,372 620,296"/><polyline points="452,368 536,444 620,368"/>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter, Arial, sans-serif">
     <defs>
       <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f172a"/><stop offset="1" stop-color="#020617"/></linearGradient>
       <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#10b981"/></linearGradient>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="${up ? "rgba(34,197,94,0.10)" : "rgba(148,163,184,0.06)"}" stroke-width="1"/></pattern>
+      <radialGradient id="glow" cx="0.5" cy="0.4" r="0.6"><stop offset="0" stop-color="${roeCol}" stop-opacity="0.16"/><stop offset="1" stop-color="${roeCol}" stop-opacity="0"/></radialGradient>
     </defs>
-    <rect width="${W}" height="${H}" rx="20" fill="url(#bg)"/>
-    <rect width="${W}" height="7" fill="url(#brand)"/>
-    <text x="44" y="72" font-size="30" font-weight="900" fill="#f1f5f9">VOLTA</text>
-    <text x="44" y="98" font-size="14" fill="#64748b" letter-spacing="3">MOCK TRADING</text>
-    <text x="${W - 44}" y="72" font-size="18" font-weight="700" fill="#94a3b8" text-anchor="end">@${(uid || "guest").slice(0, 16)}</text>
-    <text x="44" y="180" font-size="30" font-weight="800" fill="#f1f5f9">${card.sym}/USDT</text>
-    <text x="44" y="216" font-size="18" font-weight="700" fill="${card.side === "long" ? "#22c55e" : "#f87171"}">${sideKr} · ${card.lev}x</text>
-    <text x="44" y="330" font-size="110" font-weight="900" fill="${roeCol}">${roeStr}</text>
-    <text x="44" y="360" font-size="15" fill="#64748b">누적 수익률 (ROE)</text>
-    <text x="44" y="410" font-size="16" fill="#94a3b8">진입가 ${fmt(card.entry)}    현재가 ${fmt(card.mark)}</text>
-    <text x="${W - 44}" y="410" font-size="13" fill="#475569" text-anchor="end">모의투자 · 가상머니 데모</text>
+    <rect width="${W}" height="${H}" rx="24" fill="url(#bg)"/>
+    <rect width="${W}" height="${H}" rx="24" fill="url(#grid)"/>
+    <rect x="380" y="120" width="360" height="360" fill="url(#glow)"/>
+    <rect width="${W}" height="8" fill="url(#brand)"/>
+    <rect x="44" y="46" width="26" height="26" rx="7" fill="url(#brand)"/>
+    <text x="80" y="68" font-size="30" font-weight="900" fill="#f1f5f9">VOLTA</text>
+    <text x="46" y="102" font-size="12" fill="#64748b" letter-spacing="3">MOCK TRADING</text>
+    <text x="${W - 44}" y="66" font-size="17" font-weight="700" fill="#94a3b8" text-anchor="end">@${(uid || "guest").slice(0, 16)}</text>
+    <text x="44" y="200" font-size="40" font-weight="800" fill="#f1f5f9">${card.sym}/USDT</text>
+    <text x="44" y="236" font-size="20" font-weight="800" fill="${sideCol}">${sideKr} · ${card.lev}x</text>
+    <text x="44" y="330" font-size="18" fill="#64748b">ROI</text>
+    <text x="40" y="440" font-size="104" font-weight="900" fill="${roeCol}">${roeStr}</text>
+    <g stroke="${roeCol}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">${chev}</g>
+    <text x="44" y="530" font-size="15" fill="#64748b">진입가</text>
+    <text x="44" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.entry)}</text>
+    <text x="300" y="530" font-size="15" fill="#64748b">${priceLabel}</text>
+    <text x="300" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.mark)}</text>
+    <text x="${W - 44}" y="${H - 30}" font-size="12" fill="#475569" text-anchor="end">모의투자 · 가상머니 데모</text>
   </svg>`;
   function download() {
     const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
@@ -608,7 +637,7 @@ function PnLCardModal({ card, uid, onClose }) {
   }
   return (
     <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.8)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-[520px]">
+      <div className="w-full max-w-[420px]">
         <div className="rounded-2xl overflow-hidden shadow-2xl" dangerouslySetInnerHTML={{ __html: svg }} />
         <div className="flex gap-2 mt-3">
           <button onClick={download} className="btn btn-primary flex-1 py-3 text-white">이미지 저장 (PNG)</button>
@@ -724,7 +753,7 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   const dir = side === "buy" ? "long" : "short";
   const fee = qty * price * FEE;
   let cash = a.cashUSDT - fee;
-  let realizedGross = 0, closing = false, closedSide;
+  let realizedGross = 0, closing = false, closedSide, closeEntry, closeLev, closeRoe;
   const pos = positions[sym];
   const tp = opts.tp != null && opts.tp !== "" ? Number(opts.tp) : undefined;
   const sl = opts.sl != null && opts.sl !== "" ? Number(opts.sl) : undefined;
@@ -750,6 +779,9 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
     const marginReleased = pos.margin * (closeQty / pos.qty);
     cash += marginReleased + pnl;
     realizedGross += pnl;
+    closeEntry = pos.entry;
+    closeLev = marginReleased > 0 ? Math.round((closeQty * pos.entry) / marginReleased) : 1;
+    closeRoe = marginReleased > 0 ? ((pnl - fee) / marginReleased) * 100 : 0;
     const remain = pos.qty - closeQty;
     if (remain > dust) {
       positions[sym] = { side: pos.side, qty: remain, entry: pos.entry, margin: pos.margin - marginReleased, tp: pos.tp, sl: pos.sl };
@@ -765,7 +797,7 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   }
 
   const rec = { sym, side, qty, price, fee, kind, t: Date.now() };
-  if (closing) { rec.reduce = true; rec.dir = closedSide; rec.realized = realizedGross - fee; }
+  if (closing) { rec.reduce = true; rec.dir = closedSide; rec.realized = realizedGross - fee; rec.entry = closeEntry; rec.lev = closeLev; rec.roe = closeRoe; }
   else { rec.dir = dir; rec.leverage = lev; }
   return {
     ...a, cashUSDT: cash, positions,
@@ -952,7 +984,7 @@ function EquityCurve({ series, summary }) {
     </div>
   );
 }
-function HistTable({ acct }) {
+function HistTable({ acct, onRow }) {
   const [fSym, setFSym] = useState("all");
   const [fType, setFType] = useState("all");
   const hist = acct.history || [];
@@ -1010,7 +1042,7 @@ function HistTable({ acct }) {
       <table className="w-full border-collapse text-xs">
         <thead><tr><Th>시간</Th><Th>마켓</Th><Th>구분</Th><Th>방향</Th><Th>가격</Th><Th>수량</Th><Th>레버리지</Th><Th>수수료</Th><Th>실현손익</Th></tr></thead>
         <tbody>{view.map((h, i) => (
-          <tr key={i}>
+          <tr key={i} onClick={() => onRow && onRow(h)} className={onRow ? "cursor-pointer hover:bg-panel2" : ""}>
             <Td cls="text-muted">{new Date(h.t).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</Td>
             <Td>{h.sym}/USDT</Td>
             <Td cls={labelCls(h)}>{label(h)}</Td>
