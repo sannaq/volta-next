@@ -26,7 +26,7 @@ function Trade() {
   const [tf, setTf] = useState("1");
   const [type, setType] = useState("limit");
   const [price, setPrice] = useState("");
-  const [qty, setQty] = useState("");
+  const [amount, setAmount] = useState("");   // 주문 금액(USDT, 명목가치)
   const [tab, setTab] = useState("pos");
   const [leverage, setLeverage] = useState(1);
   const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet();
@@ -90,17 +90,19 @@ function Trade() {
   const orderDir = side === "buy" ? "long" : "short";
   const isOpening = !posCur || posCur.side === orderDir;   // 진입/추가 vs 감소/청산
   function submit() {
-    const q = parseFloat(qty), pr = parseFloat(price);
-    if (!(q > 0)) return toastMsg("수량을 입력하세요");
+    const amt = parseFloat(amount), pr = parseFloat(price);
+    if (!(amt > 0)) return toastMsg("금액을 입력하세요");
     if (type === "limit" && !(pr > 0)) return toastMsg("가격을 입력하세요");
     const execPx = type === "market" ? p.px : pr;
-    // 필요 증거금: 신규/추가 = 전량, 반대매매 = 초과분(반전)만
-    const newQty = isOpening ? q : Math.max(0, q - (posCur?.qty || 0));
-    if ((newQty * execPx) / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
+    if (!(execPx > 0)) return toastMsg("가격 정보 없음");
+    const q = amt / execPx;                              // 수량 = 금액(명목) / 가격
+    // 필요 증거금: 신규 진입/추가분만 (반대매매 청산분은 증거금 불필요)
+    const openNotional = isOpening ? amt : Math.max(0, (q - (posCur?.qty || 0)) * execPx);
+    if (openNotional / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
     const label = isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산");
     if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, leverage, "market")); toastMsg(`시장가 ${label}${isOpening && leverage > 1 ? ` (${leverage}x)` : ""}`); }
     else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr, leverage }] })); toastMsg("지정가 주문 접수"); }
-    setQty("");
+    setAmount("");
   }
   function cancel(id) { setAcct((a) => ({ ...a, openOrders: a.openOrders.filter((o) => o.id !== id) })); toastMsg("주문 취소"); }
   function closePosition(sym) {
@@ -113,8 +115,9 @@ function Trade() {
   }
   function setPct(pct) {
     const px = parseFloat(price) || p.px; if (!px) return;
-    const maxQty = isOpening ? (acct.cashUSDT * leverage) / px : (posCur?.qty || 0);
-    setQty((maxQty * pct).toFixed(coin.qdec));
+    // 진입: 명목 = 가용잔고 × 레버리지 × %  /  청산: 포지션 명목 × %
+    const notional = isOpening ? acct.cashUSDT * leverage * pct : (posCur?.qty || 0) * px * pct;
+    setAmount(notional.toFixed(2));
   }
 
   const fmt = (v) => v == null ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: coin.dec, maximumFractionDigits: coin.dec });
@@ -221,13 +224,28 @@ function Trade() {
               <input type="number" value={type === "market" ? "" : price} disabled={type === "market"} onChange={(e) => setPrice(e.target.value)}
                 placeholder={type === "market" ? "시장가" : "0"} className="flex-1 px-2.5 py-2 bg-bg2 border border-line rounded-lg text-ink outline-none focus:border-brand disabled:opacity-50" />
             </Field>
-            <Field label="수량">
-              <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="0.00"
-                className="flex-1 px-2.5 py-2 bg-bg2 border border-line rounded-lg text-ink outline-none focus:border-brand" />
+            <Field label="금액">
+              <div className="flex-1 relative">
+                <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00"
+                  className="w-full px-2.5 py-2 pr-14 bg-bg2 border border-line rounded-lg text-ink outline-none focus:border-brand" />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-muted2">USDT</span>
+              </div>
             </Field>
-            <div className="flex gap-1.5 mb-2.5">
+            <div className="flex gap-1.5 mb-1.5">
               {[0.25, 0.5, 0.75, 1].map((pct) => <button key={pct} onClick={() => setPct(pct)} className="flex-1 py-1 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">{pct * 100}%</button>)}
             </div>
+            {(() => {
+              const epx = type === "market" ? p.px : (parseFloat(price) || p.px);
+              const amtN = parseFloat(amount) || 0;
+              const estQty = epx ? amtN / epx : 0;
+              const estMargin = isOpening ? amtN / leverage : 0;
+              return amtN > 0 ? (
+                <div className="flex justify-between text-[10px] text-muted2 mb-2">
+                  <span>≈ {estQty.toFixed(coin.qdec)} {cur}</span>
+                  {isOpening && <span>증거금 ${estMargin.toLocaleString("en-US", { maximumFractionDigits: 2 })}</span>}
+                </div>
+              ) : null;
+            })()}
             <div className="flex justify-between text-[11px] text-muted mb-2">
               <span>{isOpening ? `주문여력 (${leverage}x)` : `청산가능 (${orderDir === "long" ? "숏" : "롱"})`}</span>
               <span className="tabnum">{isOpening ? "$" + (acct.cashUSDT * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
