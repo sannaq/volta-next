@@ -194,6 +194,16 @@ function Trade() {
     const refPx = type === "stop" ? tr : (type === "limit" ? pr : p.px);
     if (!(refPx > 0)) return toastMsg("가격 정보 없음");
     const q = amt / refPx;                               // 수량 = 금액(명목) / 기준가
+    // TP/SL 방향 검증 (즉시 체결 방지)
+    if (isOpening && (tp || sl)) {
+      if (orderDir === "long") {
+        if (tp && +tp <= refPx) return toastMsg("롱 익절가는 진입가보다 높아야 합니다");
+        if (sl && +sl >= refPx) return toastMsg("롱 손절가는 진입가보다 낮아야 합니다");
+      } else {
+        if (tp && +tp >= refPx) return toastMsg("숏 익절가는 진입가보다 낮아야 합니다");
+        if (sl && +sl <= refPx) return toastMsg("숏 손절가는 진입가보다 높아야 합니다");
+      }
+    }
     const opts = { tp: tp || undefined, sl: sl || undefined };
     // 필요 증거금: 신규 진입/추가분만 (반대매매 청산분은 증거금 불필요)
     const openNotional = isOpening ? amt : Math.max(0, (q - (posCur?.qty || 0)) * refPx);
