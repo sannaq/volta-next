@@ -267,6 +267,20 @@ function WalletAdmin() {
     try { await supabase.from("wallets").upsert({ username, data: freshWallet(), updated_at: new Date().toISOString() }, { onConflict: "username" }); setNote(`${username} 계좌 초기화 완료 (회원 재접속 시 반영)`); } catch (_) { setNote("초기화 실패"); }
     setBusy(""); load();
   }
+  async function deleteUser(username) {
+    if (username === DEMO_ADMIN.id) { setNote("관리자 본인 계정은 삭제할 수 없습니다."); return; }
+    if (!window.confirm(`[${username}] 계정을 완전 삭제할까요?\n지갑·거래기록·로그인기록 전부 삭제되며 되돌릴 수 없습니다.`)) return;
+    setBusy(username);
+    try {
+      await Promise.all([
+        supabase.from("wallets").delete().eq("username", username),
+        supabase.from("user_tracking").delete().eq("username", username),
+        supabase.from("login_events").delete().eq("username", username),
+      ]);
+      setNote(`${username} 계정 삭제 완료`);
+    } catch (_) { setNote("삭제 실패"); }
+    setBusy(""); load();
+  }
 
   if (!supabaseEnabled) {
     return (
@@ -310,6 +324,7 @@ function WalletAdmin() {
                     <td className="px-4 py-2.5 text-right whitespace-nowrap">
                       <button disabled={busy === w.username} onClick={(e) => { e.stopPropagation(); grant(w.username, w); }} className="border border-brand/40 bg-brand/10 text-brand px-2.5 py-1 rounded-md text-[11px] font-semibold mr-1 disabled:opacity-50">자금지급</button>
                       <button disabled={busy === w.username} onClick={(e) => { e.stopPropagation(); resetUser(w.username); }} className="border border-down/40 bg-down/5 text-down px-2.5 py-1 rounded-md text-[11px] font-semibold disabled:opacity-50">초기화</button>
+                      <button disabled={busy === w.username || w.username === DEMO_ADMIN.id} onClick={(e) => { e.stopPropagation(); deleteUser(w.username); }} className="border border-down/60 bg-down/10 text-down px-2.5 py-1 rounded-md text-[11px] font-bold ml-1 disabled:opacity-30">삭제</button>
                     </td>
                   </tr>
                 );
