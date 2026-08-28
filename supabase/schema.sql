@@ -4,6 +4,19 @@
 -- 여기 저장하는 것: 아이디(username), 로그인 이력, 모의수익률.
 -- ─────────────────────────────────────────────────────────────
 
+-- 계정별 모의투자 지갑 (시드/포지션/거래내역을 서버에 영구 보관)
+-- 세션이 풀리거나 인앱 브라우저가 저장소를 지워도 계정으로 복구된다.
+create table if not exists public.wallets (
+  username    text primary key,
+  data        jsonb not null,          -- 지갑 전체(cashUSDT/positions/history/ledger/…)
+  updated_at  timestamptz not null default now()
+);
+alter table public.wallets enable row level security;
+-- 데모: 아이디 기준 자유 읽기/쓰기 (가상머니라 민감정보 아님). 실서비스는 auth.uid 매핑 권장.
+create policy "wallets read"  on public.wallets for select using (true);
+create policy "wallets write" on public.wallets for insert with check (true);
+create policy "wallets update" on public.wallets for update using (true) with check (true);
+
 -- 회원별 추적 요약 (아이디 기준 denormalized)
 create table if not exists public.user_tracking (
   username     text primary key,

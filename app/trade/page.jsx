@@ -42,7 +42,7 @@ function Trade() {
   const [pnlCard, setPnlCard] = useState(null); // 공유 카드용 포지션
   const [tab, setTab] = useState("pos");
   const [leverage, setLeverage] = useState(1);
-  const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet();
+  const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet(sp.get("id") || "guest");
   const [walletOpen, setWalletOpen] = useState(false);
   const [toast, setToast] = useState("");
 
