@@ -258,21 +258,20 @@ function Trade({ sessionUid }) {
     const roe = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
     const effLev = pos.margin > 0 ? Math.round((pos.qty * pos.entry) / pos.margin) : 1;
     const c = brand.coins.find((x) => x.sym === sym) || {};
-    setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, color: c.color, dec: c.dec ?? 2 });
+    setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, dec: c.dec ?? 2, margin: pos.margin, maint: pos.qty * px * MM, pnl, mode: marginMode, closed: false });
   }
   function openHistoryCard(rec) {
     const c = brand.coins.find((x) => x.sym === rec.sym) || {};
     const dec = c.dec ?? 2;
     if (rec.reduce) {
-      // 청산/익절/손절 기록 → 실현 결과 카드
-      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.entry ?? rec.price, mark: rec.price, roe: rec.roe ?? 0, lev: rec.lev ?? 1, color: c.color, dec, closed: true });
+      const margin = (rec.qty * (rec.entry ?? rec.price)) / (rec.lev || 1);
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.entry ?? rec.price, mark: rec.price, roe: rec.roe ?? 0, lev: rec.lev ?? 1, dec, margin, maint: rec.qty * rec.price * MM, pnl: rec.realized ?? 0, mode: "cross", closed: true });
     } else {
-      // 진입 기록 → 현재가 기준 실시간 결과
       const live = prices[rec.sym]?.px ?? rec.price;
       const pnl = (rec.dir === "long" ? (live - rec.price) : (rec.price - live)) * rec.qty;
       const margin = (rec.qty * rec.price) / (rec.leverage || 1);
       const roe = margin > 0 ? (pnl / margin) * 100 : 0;
-      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.price, mark: live, roe, lev: rec.leverage || 1, color: c.color, dec, closed: false });
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.price, mark: live, roe, lev: rec.leverage || 1, dec, margin, maint: rec.qty * live * MM, pnl, mode: "cross", closed: false });
     }
   }
   function setPct(pct) {
@@ -621,59 +620,65 @@ function WalletModal({ wallet, summary, onClose, onDeposit, onWithdraw, onReset 
   );
 }
 function PnLCardModal({ card, uid, onClose }) {
-  const up = card.roe >= 0;
-  const roeCol = up ? "#22c55e" : "#f87171";
-  const roeStr = (up ? "+" : "") + card.roe.toFixed(2) + "%";
+  const up = (card.roe || 0) >= 0;
+  const g = up ? "#22c55e" : "#ef4444";
+  const roeStr = (up ? "+" : "") + (card.roe || 0).toFixed(2) + "%";
   const dec = card.dec ?? 2;
-  const fmt = (v) => v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
-  const sideKr = card.side === "long" ? "LONG 롱" : "SHORT 숏";
-  const sideCol = card.side === "long" ? "#22c55e" : "#f87171";
+  const fmt = (v) => (v ?? 0).toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  const n2 = (v) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const sideKr = card.side === "long" ? "매수" : "매도";
+  const pill = card.side === "long" ? "↑ LONG" : "↓ SHORT";
+  const modeKr = card.mode === "isolated" ? "격리" : "교차";
   const priceLabel = card.closed ? "청산가" : "현재가";
-  const W = 640, H = 640;
-  const chev = up
-    ? `<polyline points="452,300 536,224 620,300"/><polyline points="452,372 536,296 620,372"/><polyline points="452,444 536,368 620,444"/>`
-    : `<polyline points="452,224 536,300 620,224"/><polyline points="452,296 536,372 620,296"/><polyline points="452,368 536,444 620,368"/>`;
+  const pnlStr = ((card.pnl || 0) >= 0 ? "+" : "") + n2(card.pnl);
+  const bgStop = up ? "#0a1410" : "#160a0b";
+  const chart = up
+    ? `<polyline points="228,432 258,402 280,412 300,360 322,376 352,300" fill="none" stroke="${g}" stroke-width="2.5" opacity="0.85"/><circle cx="352" cy="300" r="4" fill="${g}"/><polyline points="228,300 250,270 272,286 300,222 330,238 355,150" fill="none" stroke="${g}" stroke-width="1.5" opacity="0.32"/>`
+    : `<polyline points="228,320 258,350 280,336 300,386 322,370 352,432" fill="none" stroke="${g}" stroke-width="2.5" opacity="0.85"/><circle cx="352" cy="432" r="4" fill="${g}"/><polyline points="228,200 250,236 272,220 300,276 330,258 355,332" fill="none" stroke="${g}" stroke-width="1.5" opacity="0.32"/>`;
+  const W = 360, H = 460;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter, Arial, sans-serif">
     <defs>
-      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f172a"/><stop offset="1" stop-color="#020617"/></linearGradient>
-      <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#10b981"/></linearGradient>
-      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="${up ? "rgba(34,197,94,0.10)" : "rgba(148,163,184,0.06)"}" stroke-width="1"/></pattern>
-      <radialGradient id="glow" cx="0.5" cy="0.4" r="0.6"><stop offset="0" stop-color="${roeCol}" stop-opacity="0.16"/><stop offset="1" stop-color="${roeCol}" stop-opacity="0"/></radialGradient>
+      <linearGradient id="cbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${bgStop}"/><stop offset="1" stop-color="#060608"/></linearGradient>
+      <radialGradient id="cglow" cx="0.82" cy="0.4" r="0.55"><stop offset="0" stop-color="${g}" stop-opacity="0.26"/><stop offset="1" stop-color="${g}" stop-opacity="0"/></radialGradient>
+      <linearGradient id="cgold" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#e9d8a6"/><stop offset="1" stop-color="#b8935a"/></linearGradient>
     </defs>
-    <rect width="${W}" height="${H}" rx="24" fill="url(#bg)"/>
-    <rect width="${W}" height="${H}" rx="24" fill="url(#grid)"/>
-    <rect x="380" y="120" width="360" height="360" fill="url(#glow)"/>
-    <rect width="${W}" height="8" fill="url(#brand)"/>
-    <rect x="44" y="46" width="26" height="26" rx="7" fill="url(#brand)"/>
-    <text x="80" y="68" font-size="30" font-weight="900" fill="#f1f5f9">VOLTA</text>
-    <text x="46" y="102" font-size="12" fill="#64748b" letter-spacing="3">MOCK TRADING</text>
-    <text x="${W - 44}" y="66" font-size="17" font-weight="700" fill="#94a3b8" text-anchor="end">@${(uid || "guest").slice(0, 16)}</text>
-    <text x="44" y="200" font-size="40" font-weight="800" fill="#f1f5f9">${card.sym}/USDT</text>
-    <text x="44" y="236" font-size="20" font-weight="800" fill="${sideCol}">${sideKr} · ${card.lev}x</text>
-    <text x="44" y="330" font-size="18" fill="#64748b">ROI</text>
-    <text x="44" y="438" font-size="86" font-weight="900" fill="${roeCol}">${roeStr}</text>
-    <g stroke="${roeCol}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">${chev}</g>
-    <text x="44" y="530" font-size="15" fill="#64748b">진입가</text>
-    <text x="44" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.entry)}</text>
-    <text x="300" y="530" font-size="15" fill="#64748b">${priceLabel}</text>
-    <text x="300" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.mark)}</text>
-    <text x="${W - 44}" y="${H - 30}" font-size="12" fill="#475569" text-anchor="end">모의투자 · 가상머니 데모</text>
+    <rect width="${W}" height="${H}" rx="18" fill="url(#cbg)"/>
+    <rect width="${W}" height="${H}" rx="18" fill="url(#cglow)"/>
+    ${chart}
+    <text x="28" y="50" font-family="Georgia, 'Times New Roman', serif" font-size="22" letter-spacing="6" fill="url(#cgold)">VOLTA</text>
+    <text x="${W - 26}" y="42" font-size="12" font-weight="700" fill="#8b93a7" text-anchor="end">@${(uid || "guest").slice(0, 16)}</text>
+    <rect x="28" y="68" width="62" height="34" rx="9" fill="#111" stroke="#2a2a2a"/>
+    <text x="59" y="90" font-size="15" font-weight="800" fill="#fff" text-anchor="middle">${card.sym}</text>
+    <text x="98" y="90" font-size="12" fill="#8b93a7">x${card.lev} (${modeKr})</text>
+    <text x="28" y="128" font-size="22" font-weight="900" fill="${g}">${sideKr}</text>
+    <text x="28" y="162" font-size="12.5" fill="#8b93a7">진입가</text><text x="235" y="162" font-size="12.5" font-weight="700" fill="#e2e8f0" text-anchor="end">${fmt(card.entry)}</text>
+    <text x="28" y="186" font-size="12.5" fill="#8b93a7">${priceLabel}</text><text x="235" y="186" font-size="12.5" font-weight="700" fill="#e2e8f0" text-anchor="end">${fmt(card.mark)}</text>
+    <text x="28" y="210" font-size="12.5" fill="#8b93a7">투자금</text><text x="235" y="210" font-size="12.5" font-weight="700" fill="#e2e8f0" text-anchor="end">${n2(card.margin)}</text>
+    <text x="28" y="234" font-size="12.5" fill="#8b93a7">유지증거금</text><text x="235" y="234" font-size="12.5" font-weight="700" fill="#e2e8f0" text-anchor="end">${n2(card.maint)}</text>
+    <line x1="28" y1="254" x2="235" y2="254" stroke="${up ? "#1c2620" : "#261a1c"}"/>
+    <text x="28" y="284" font-size="13" fill="#8b93a7">수익률</text>
+    <text x="26" y="328" font-size="42" font-weight="900" fill="${g}">${roeStr}</text>
+    <rect x="28" y="348" width="210" height="60" rx="12" fill="${up ? "rgba(34,197,94,0.09)" : "rgba(239,68,68,0.09)"}" stroke="${up ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}"/>
+    <text x="44" y="372" font-size="12" fill="#8b93a7">손익</text>
+    <text x="44" y="396" font-size="21" font-weight="900" fill="${g}">${pnlStr} <tspan font-size="12">USDT</tspan></text>
+    <rect x="28" y="420" width="120" height="30" rx="15" fill="none" stroke="${up ? "#2f6b45" : "#6b2f2f"}"/>
+    <text x="88" y="440" font-size="13" font-weight="700" fill="${g}" text-anchor="middle">${pill}</text>
   </svg>`;
   const svgDisplay = svg.replace(`width="${W}" height="${H}"`, `width="100%" height="100%" style="display:block"`);
   function download() {
     const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     const img = new Image();
     img.onload = () => {
-      const cv = document.createElement("canvas"); cv.width = W * 2; cv.height = H * 2;
-      const ctx = cv.getContext("2d"); ctx.scale(2, 2); ctx.drawImage(img, 0, 0);
+      const cv = document.createElement("canvas"); cv.width = W * 3; cv.height = H * 3;
+      const ctx = cv.getContext("2d"); ctx.scale(3, 3); ctx.drawImage(img, 0, 0);
       cv.toBlob((b) => { const u = URL.createObjectURL(b); const a = document.createElement("a"); a.href = u; a.download = `volta-pnl-${card.sym}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(u), 1000); });
     };
     img.src = url;
   }
   return (
     <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.8)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-[420px]">
-        <div className="rounded-2xl overflow-hidden shadow-2xl aspect-square" dangerouslySetInnerHTML={{ __html: svgDisplay }} />
+      <div className="w-full max-w-[380px]">
+        <div className="rounded-[18px] overflow-hidden shadow-2xl" style={{ aspectRatio: "360 / 460" }} dangerouslySetInnerHTML={{ __html: svgDisplay }} />
         <div className="flex gap-2 mt-3">
           <button onClick={download} className="btn btn-primary flex-1 py-3 text-white">이미지 저장 (PNG)</button>
           <button onClick={onClose} className="btn btn-ghost px-6 py-3">닫기</button>
