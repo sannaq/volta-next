@@ -53,7 +53,7 @@ function Trade() {
       }
       if (!fills.length) return a;
       let na = { ...a, openOrders: keep };
-      for (const o of fills) na = applyFill(na, o.sym, o.side, o.qty, o.price, o.leverage || 1);
+      for (const o of fills) na = applyFill(na, o.sym, o.side, o.qty, o.price, o.leverage || 1, "limit");
       return na;
     });
   }, [prices]); // eslint-disable-line
@@ -94,7 +94,7 @@ function Trade() {
     const execPx = type === "market" ? p.px : pr;
     if (side === "buy" && (q * execPx) / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
     if (side === "sell" && q > (acct.holdings[cur] || 0) + 1e-9) return toastMsg("보유수량 부족");
-    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, lev)); toastMsg(`시장가 ${side === "buy" ? "매수" : "매도"} 체결${side === "buy" && leverage > 1 ? ` (${leverage}x)` : ""}`); }
+    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, lev, "market")); toastMsg(`시장가 ${side === "buy" ? "매수" : "매도"} 체결${side === "buy" && leverage > 1 ? ` (${leverage}x)` : ""}`); }
     else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr, leverage: lev }] })); toastMsg("지정가 주문 접수"); }
     setQty("");
   }
@@ -319,33 +319,39 @@ function Stat({ label, val, cls = "", sub }) {
   );
 }
 
-/** 격리 마진 체결: 매수는 마진만 차감하고 나머지는 차입, 매도는 비례 상환 후 정산 */
-function applyFill(a, sym, side, qty, price, leverage = 1) {
+/** 격리 마진 체결: 매수는 마진만 차감하고 나머지는 차입, 매도는 비례 상환 후 정산. 수수료·실현손익 기록. */
+function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market") {
+  const FEE = brand.feeRate || 0;
   const h = { ...a.holdings }, b = { ...(a.borrowed || {}) }, e = { ...(a.entry || {}) };
   const lev = Math.max(1, leverage || 1);
   if (side === "buy") {
     const notional = qty * price;
     const margin = notional / lev;
+    const fee = notional * FEE;
     const prevQty = h[sym] || 0, prevCost = (e[sym] || 0) * prevQty;
     h[sym] = prevQty + qty;
     e[sym] = h[sym] > 0 ? (prevCost + qty * price) / h[sym] : price;
     b[sym] = (b[sym] || 0) + (notional - margin);
     return {
-      ...a, cashUSDT: a.cashUSDT - margin, holdings: h, borrowed: b, entry: e,
-      history: [{ sym, side, qty, price, leverage: lev, t: Date.now() }, ...a.history].slice(0, 60),
+      ...a, cashUSDT: a.cashUSDT - margin - fee, holdings: h, borrowed: b, entry: e,
+      history: [{ sym, side, qty, price, leverage: lev, fee, kind, t: Date.now() }, ...a.history].slice(0, 200),
     };
   } else {
     const have = h[sym] || 0;
     const q = Math.min(qty, have);
     if (q <= 0) return a;
+    const entryPx = e[sym] || price;
     const frac = q / have;
     const repay = (b[sym] || 0) * frac;
     const proceeds = q * price;
+    const fee = proceeds * FEE;
+    const realized = q * (price - entryPx) - fee;   // 실현손익(수수료 차감)
     h[sym] = have - q; b[sym] = (b[sym] || 0) - repay;
     if (h[sym] < 1e-9) { delete h[sym]; delete b[sym]; delete e[sym]; }
     return {
-      ...a, cashUSDT: a.cashUSDT + (proceeds - repay), holdings: h, borrowed: b, entry: e,
-      history: [{ sym, side, qty: q, price, t: Date.now() }, ...a.history].slice(0, 60),
+      ...a, cashUSDT: a.cashUSDT + (proceeds - repay - fee), holdings: h, borrowed: b, entry: e,
+      realizedPnL: (a.realizedPnL || 0) + realized,
+      history: [{ sym, side, qty: q, price, fee, realized, kind, t: Date.now() }, ...a.history].slice(0, 200),
     };
   }
 }
@@ -359,7 +365,7 @@ function checkLiquidations(a, prices) {
     const value = a.holdings[sym] * px;
     const debt = (a.borrowed || {})[sym] || 0;
     if (debt > 0 && value <= debt * 1.005) {   // 유지증거금 0.5%
-      na = applyFill(na, sym, "sell", na.holdings[sym], px, 1);
+      na = applyFill(na, sym, "sell", na.holdings[sym], px, 1, "liquidation");
       liquidated.push(sym); changed = true;
     }
   }
@@ -435,15 +441,43 @@ function OpenTable({ acct, onCancel }) {
   );
 }
 function HistTable({ acct }) {
-  if (!acct.history.length) return <div className="text-center text-muted2 py-7 text-xs">체결 내역이 없습니다</div>;
+  const hist = acct.history || [];
+  const num = (v, d = 2) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
+  if (!hist.length) return <div className="text-center text-muted2 py-7 text-xs">체결 내역이 없습니다</div>;
+  const closes = hist.filter((h) => h.side === "sell" && h.realized != null);
+  const wins = closes.filter((h) => h.realized > 0).length;
+  const winRate = closes.length ? (wins / closes.length) * 100 : 0;
+  const realizedTotal = acct.realizedPnL || 0;
+  const kindLabel = (h) => h.kind === "liquidation" ? "청산" : h.side === "buy" ? "매수" : "매도";
+  const kindCls = (h) => h.kind === "liquidation" ? "text-down font-bold" : h.side === "buy" ? "text-up font-bold" : "text-down font-bold";
   return (
-    <table className="w-full border-collapse text-xs">
-      <thead><tr><Th>마켓</Th><Th>구분</Th><Th>가격</Th><Th>수량</Th><Th>시간</Th></tr></thead>
-      <tbody>{acct.history.map((h, i) => (
-        <tr key={i}><Td>{h.sym}/USDT</Td><Td cls={h.side === "buy" ? "text-up font-bold" : "text-down font-bold"}>{h.side === "buy" ? "매수" : "매도"}</Td>
-          <Td cls="tabnum">{h.price.toLocaleString("en-US", { maximumFractionDigits: 4 })}</Td><Td cls="tabnum">{h.qty}</Td>
-          <Td>{new Date(h.t).toLocaleTimeString("ko-KR")}</Td></tr>
-      ))}</tbody>
-    </table>
+    <div>
+      {/* 요약 */}
+      <div className="flex flex-wrap gap-x-5 gap-y-1 px-4 py-2.5 border-b border-line text-xs bg-panel2/40 sticky top-0 z-10">
+        <span><span className="text-muted mr-1.5">총 거래</span><b className="tabnum">{hist.length}</b></span>
+        <span><span className="text-muted mr-1.5">청산 완료</span><b className="tabnum">{closes.length}</b></span>
+        <span><span className="text-muted mr-1.5">승률</span><b className="tabnum">{winRate.toFixed(1)}%</b></span>
+        <span><span className="text-muted mr-1.5">누적 실현손익</span>
+          <b className={`tabnum ${realizedTotal >= 0 ? "text-up" : "text-down"}`}>{realizedTotal >= 0 ? "+$" : "-$"}{num(Math.abs(realizedTotal))}</b>
+        </span>
+      </div>
+      <table className="w-full border-collapse text-xs">
+        <thead><tr><Th>시간</Th><Th>마켓</Th><Th>구분</Th><Th>가격</Th><Th>수량</Th><Th>레버리지</Th><Th>수수료</Th><Th>실현손익</Th></tr></thead>
+        <tbody>{hist.map((h, i) => (
+          <tr key={i}>
+            <Td cls="text-muted">{new Date(h.t).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</Td>
+            <Td>{h.sym}/USDT</Td>
+            <Td cls={kindCls(h)}>{kindLabel(h)}</Td>
+            <Td cls="tabnum">{num(h.price, 4)}</Td>
+            <Td cls="tabnum">{num(h.qty, 6)}</Td>
+            <Td cls="tabnum">{h.leverage ? h.leverage + "x" : "-"}</Td>
+            <Td cls="tabnum text-muted">{h.fee ? "$" + num(h.fee, 3) : "-"}</Td>
+            <Td cls={`tabnum font-bold ${h.realized == null ? "text-muted2" : h.realized >= 0 ? "text-up" : "text-down"}`}>
+              {h.realized == null ? "-" : (h.realized >= 0 ? "+$" : "-$") + num(Math.abs(h.realized))}
+            </Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
   );
 }
