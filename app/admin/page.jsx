@@ -4,7 +4,8 @@ import Link from "next/link";
 import { brand } from "@/lib/brand.config";
 import { buildAdminData } from "@/lib/adminMockData";
 import { listTrackedUsers } from "@/lib/tracking";
-import { supabaseEnabled } from "@/lib/supabase";
+import { supabase, supabaseEnabled } from "@/lib/supabase";
+import { freshWallet } from "@/lib/useWallet";
 
 /**
  * 관리자 대시보드 — **합성(가짜) 데모 데이터** 전용.
@@ -152,6 +153,9 @@ function Dashboard({ onLogout }) {
           )}
         </div>
 
+        {/* 회원 지갑 감시 + 자금 관리 (실데이터) */}
+        <WalletAdmin />
+
         <div className="grid lg:grid-cols-2 gap-4 mb-6">
           {/* ROI distribution */}
           <div className="card !rounded-xl p-5">
@@ -218,6 +222,103 @@ function Dashboard({ onLogout }) {
         </div>
       </div>
     </main>
+  );
+}
+
+function WalletAdmin() {
+  const [wallets, setWallets] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load() {
+    if (!supabaseEnabled) return;
+    try {
+      const { data } = await supabase.from("wallets").select("username,data,updated_at").order("updated_at", { ascending: false });
+      setWallets(data || []);
+    } catch (_) {}
+  }
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+
+  const money = (v) => "$" + (Number(v) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const ago = (t) => { const m = Math.floor((Date.now() - new Date(t).getTime()) / 60000); if (m < 1) return "방금"; if (m < 60) return m + "분 전"; const h = Math.floor(m / 60); if (h < 24) return h + "시간 전"; return Math.floor(h / 24) + "일 전"; };
+  const posSummary = (d) => {
+    const p = d?.positions || {}; const ks = Object.keys(p);
+    if (!ks.length) return <span className="text-muted2">-</span>;
+    return ks.map((s) => {
+      const x = p[s];
+      return <span key={s} className={`inline-block mr-1.5 ${x.side === "long" ? "text-up" : "text-down"}`}>{s} {x.side === "long" ? "롱" : "숏"} {(+x.qty).toFixed(4)}</span>;
+    });
+  };
+
+  async function grant(username, w) {
+    const s = window.prompt(`[${username}] 에게 지급할 가상자금 (USDT):`, "1000");
+    const amt = Math.floor(Number(s) || 0);
+    if (!amt) return;
+    setBusy(username);
+    const d = w.data || {};
+    const next = { ...d, cashUSDT: (d.cashUSDT || 0) + amt, principal: (d.principal || 0) + amt, ledger: [{ type: "deposit", amt, t: Date.now() }, ...(d.ledger || [])].slice(0, 100) };
+    try { await supabase.from("wallets").upsert({ username, data: next, updated_at: new Date().toISOString() }, { onConflict: "username" }); setNote(`${username} 에게 ${amt.toLocaleString()} USDT 지급 완료 (회원 재접속 시 반영)`); } catch (_) { setNote("지급 실패"); }
+    setBusy(""); load();
+  }
+  async function resetUser(username) {
+    if (!window.confirm(`[${username}] 계좌를 초기 시드로 초기화할까요? (되돌릴 수 없음)`)) return;
+    setBusy(username);
+    try { await supabase.from("wallets").upsert({ username, data: freshWallet(), updated_at: new Date().toISOString() }, { onConflict: "username" }); setNote(`${username} 계좌 초기화 완료 (회원 재접속 시 반영)`); } catch (_) { setNote("초기화 실패"); }
+    setBusy(""); load();
+  }
+
+  if (!supabaseEnabled) {
+    return (
+      <div className="card !rounded-xl p-5 mb-6 text-xs text-muted2">
+        회원 지갑 감시·자금관리는 <b className="text-ink">Supabase 연결 시</b> 활성화됩니다. (환경변수 미설정)
+      </div>
+    );
+  }
+
+  return (
+    <div className="card !rounded-xl overflow-hidden mb-6">
+      <div className="flex items-center flex-wrap gap-2 px-5 py-3 border-b border-line">
+        <h3 className="text-sm font-bold">회원 지갑 감시 · 자금 관리 <span className="text-brand">실데이터</span></h3>
+        <span className="text-[11px] text-muted2">({wallets.length}개 계좌 · 5초마다 갱신)</span>
+        {note && <span className="ml-auto text-[11px] text-brand">{note}</span>}
+      </div>
+      {wallets.length === 0 ? (
+        <div className="text-center text-muted2 py-8 text-xs">아직 생성된 지갑이 없습니다. 회원이 접속해 거래하면 여기에 표시됩니다.</div>
+      ) : (
+        <div className="overflow-auto max-h-[420px]">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="text-muted">
+                {["아이디", "예수금", "투입원금", "실현손익", "보유 포지션(감시)", "최근활동", "관리"].map((h) => (
+                  <th key={h} className="px-4 py-2.5 text-right first:text-left sticky top-0 bg-panel font-semibold">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {wallets.map((w) => {
+                const d = w.data || {};
+                const rp = d.realizedPnL || 0;
+                return (
+                  <tr key={w.username} className="border-b border-line/40">
+                    <td className="px-4 py-2.5 font-semibold">{w.username}</td>
+                    <td className="px-4 py-2.5 text-right tabnum">{money(d.cashUSDT)}</td>
+                    <td className="px-4 py-2.5 text-right tabnum text-muted">{money(d.principal)}</td>
+                    <td className={`px-4 py-2.5 text-right tabnum font-bold ${rp >= 0 ? "text-up" : "text-down"}`}>{rp >= 0 ? "+" : ""}{money(rp).slice(1)}</td>
+                    <td className="px-4 py-2.5 text-right text-[11px]">{posSummary(d)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted">{ago(w.updated_at)}</td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <button disabled={busy === w.username} onClick={() => grant(w.username, w)} className="border border-brand/40 bg-brand/10 text-brand px-2.5 py-1 rounded-md text-[11px] font-semibold mr-1 disabled:opacity-50">자금지급</button>
+                      <button disabled={busy === w.username} onClick={() => resetUser(w.username)} className="border border-down/40 bg-down/5 text-down px-2.5 py-1 rounded-md text-[11px] font-semibold disabled:opacity-50">초기화</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="px-5 py-2 text-[10px] text-muted2 border-t border-line">⚠️ 전부 가상머니(MOCK)입니다. 지급/초기화는 회원의 다음 접속 시 반영됩니다.</div>
+    </div>
   );
 }
 

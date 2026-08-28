@@ -578,18 +578,11 @@ function WalletModal({ wallet, summary, onClose, onDeposit, onWithdraw, onReset 
             cls={summary.pnl >= 0 ? "text-up" : "text-down"} sub={`${summary.pnl >= 0 ? "+" : ""}${summary.roi.toFixed(2)}%`} />
         </div>
 
-        {/* amount */}
-        <label className="block text-[13px] text-muted mb-1.5">금액 (USDT)</label>
-        <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0"
-          className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand mb-2.5" />
-        <div className="flex gap-1.5 mb-4">
-          {quick.map((q) => <button key={q} onClick={() => setAmt(String(q))} className="flex-1 py-1.5 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">+${q.toLocaleString()}</button>)}
+        {/* 충전·초기화 불가 안내 (고정 시드, 관리자 전용) */}
+        <div className="text-[12px] text-muted2 bg-bg2 border border-line rounded-[10px] px-3.5 py-3 leading-relaxed">
+          🔒 시드는 <b className="text-ink">고정</b>입니다. 충전·출금·초기화는 할 수 없습니다.
+          <br />계좌 조정이 필요하면 <b className="text-brand">관리자</b>에게 요청하세요.
         </div>
-        <div className="flex gap-2.5">
-          <button onClick={() => { if (v > 0) { onDeposit(v); setAmt(""); } }} className="btn btn-primary flex-1 py-3 text-white">가상자금 충전</button>
-          <button onClick={() => { if (v > 0) { onWithdraw(v); setAmt(""); } }} className="btn btn-ghost flex-1 py-3">출금</button>
-        </div>
-        <button onClick={onReset} className="w-full mt-2.5 py-2.5 rounded-[10px] border border-down/40 text-down bg-down/5 text-[13px] font-semibold hover:bg-down/10">모의투자 계좌 초기화</button>
 
         {/* ledger */}
         {wallet.ledger?.length > 0 && (
@@ -732,17 +725,10 @@ function MyPageView({ acct, summary, series, uid, onDeposit, onWithdraw, onReset
           <span className="text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2 py-0.5">가짜돈</span>
         </div>
         <p className="text-muted2 text-xs mb-4">실제 결제·입금이 아닙니다. 모의투자용 가상 USDT입니다.</p>
-        <label className="block text-[13px] text-muted mb-1.5">금액 (USDT)</label>
-        <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0"
-          className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand mb-2.5" />
-        <div className="flex gap-1.5 mb-4">
-          {quick.map((q) => <button key={q} onClick={() => setAmt(String(q))} className="flex-1 py-1.5 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">+${q.toLocaleString()}</button>)}
+        <div className="text-[12px] text-muted2 bg-bg2 border border-line rounded-[10px] px-3.5 py-3 leading-relaxed">
+          🔒 시드는 <b className="text-ink">고정</b>입니다. 가상자금 충전·출금·초기화는 할 수 없습니다.
+          <br />계좌 초기화가 필요하면 <b className="text-brand">관리자</b>에게 요청하세요.
         </div>
-        <div className="flex gap-2.5">
-          <button onClick={() => { if (v > 0) { onDeposit(v); setAmt(""); } }} className="btn btn-primary flex-1 py-3 text-white">충전</button>
-          <button onClick={() => { if (v > 0) { onWithdraw(v); setAmt(""); } }} className="btn btn-ghost flex-1 py-3">출금</button>
-        </div>
-        <button onClick={onReset} className="w-full mt-2.5 py-2.5 rounded-[10px] border border-down/40 text-down bg-down/5 text-[13px] font-semibold hover:bg-down/10">계좌 초기화</button>
 
         {acct.ledger?.length > 0 && (
           <div className="mt-5">
