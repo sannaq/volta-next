@@ -33,6 +33,12 @@ function Trade() {
   const [recentTrades, setRecentTrades] = useState([]);
   const [equitySeries, setEquitySeries] = useState([]);
   const [view, setView] = useState("trade");   // trade | history | mypage
+  const [marginMode, setMarginMode] = useState("isolated"); // isolated | cross
+  const [funding, setFunding] = useState({});  // sym → 펀딩비율(%)
+  const [fundingIn, setFundingIn] = useState(60);
+  const [alerts, setAlerts] = useState([]);    // {id, sym, price, above}
+  const [alertPrice, setAlertPrice] = useState("");
+  const [pnlCard, setPnlCard] = useState(null); // 공유 카드용 포지션
   const [tab, setTab] = useState("pos");
   const [leverage, setLeverage] = useState(1);
   const { wallet: acct, setWallet: setAcct, deposit, withdraw, reset } = useWallet();
@@ -83,7 +89,7 @@ function Trade() {
           notes.push(`${tpHit ? "익절" : "손절"} ${sym}`); changed = true;
         }
       }
-      const liq = checkLiquidations(na, prices);
+      const liq = checkLiquidations(na, prices, marginMode);
       if (liq.changed) { na = liq.wallet; notes.push(`⚠️청산 ${liq.liquidated.join(",")}`); changed = true; }
       if (changed) setTimeout(() => toastMsg(notes.join(" · ")), 0);
       return changed ? na : a;
@@ -121,6 +127,55 @@ function Trade() {
     const id = setInterval(() => setEquitySeries((prev) => [...prev, { t: Date.now(), e: trackRef.current.equity }].slice(-120)), 2000);
     return () => clearInterval(id);
   }, []);
+
+  // 펀딩비 초기화 (클라이언트, -0.03%~+0.03%)
+  useEffect(() => {
+    setFunding(Object.fromEntries(brand.coins.map((c) => [c.sym, +(((c.sym.charCodeAt(0) % 7) - 3) * 0.01).toFixed(4)])));
+  }, []);
+  const fundingRef = useRef({}); fundingRef.current = funding;
+  const pricesRef = useRef({}); pricesRef.current = prices;
+
+  // 펀딩 카운트다운 + 정산(60초 주기, 데모)
+  useEffect(() => {
+    const id = setInterval(() => {
+      setFundingIn((prev) => {
+        if (prev <= 1) {
+          setAcct((a) => {
+            const positions = a.positions || {};
+            if (!Object.keys(positions).length) return a;
+            let cash = a.cashUSDT, total = 0;
+            for (const s in positions) {
+              const pos = positions[s];
+              const mark = pricesRef.current[s]?.px ?? pos.entry;
+              const rate = (fundingRef.current[s] || 0) / 100;
+              const payment = pos.qty * mark * rate * (pos.side === "long" ? 1 : -1);
+              cash -= payment; total += payment; // 펀딩>0: 롱 지불, 숏 수취
+            }
+            return { ...a, cashUSDT: cash, realizedPnL: (a.realizedPnL || 0) - total };
+          });
+          setTimeout(() => toastMsg("펀딩비 정산 완료"), 0);
+          // 다음 주기 요율 소폭 변동
+          setFunding((f) => Object.fromEntries(Object.entries(f).map(([s, r]) => [s, +Math.max(-0.05, Math.min(0.05, r + ((s.charCodeAt(1) % 3) - 1) * 0.005)).toFixed(4)])));
+          return 60;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, []); // eslint-disable-line
+
+  // 가격 알림 체크
+  useEffect(() => {
+    if (!alerts.length) return;
+    const hit = alerts.filter((al) => {
+      const lp = prices[al.sym]?.px; if (lp == null) return false;
+      return al.above ? lp >= al.price : lp <= al.price;
+    });
+    if (hit.length) {
+      hit.forEach((al) => toastMsg(`🔔 ${al.sym} ${al.above ? "≥" : "≤"} ${al.price} 도달`));
+      setAlerts((prev) => prev.filter((al) => !hit.includes(al)));
+    }
+  }, [prices]); // eslint-disable-line
 
   const book = useMemo(() => genBook(p.px, coin.dec), [p.px, coin.dec]);
 
@@ -162,6 +217,15 @@ function Trade() {
     });
     toastMsg("포지션 청산");
   }
+  function openShare(sym) {
+    const pos = (acct.positions || {})[sym]; if (!pos) return;
+    const px = prices[sym]?.px ?? pos.entry;
+    const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
+    const roe = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
+    const effLev = pos.margin > 0 ? Math.round((pos.qty * pos.entry) / pos.margin) : 1;
+    const c = brand.coins.find((x) => x.sym === sym) || {};
+    setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, color: c.color, dec: c.dec ?? 2 });
+  }
   function setPct(pct) {
     const px = parseFloat(price) || p.px; if (!px) return;
     // 진입: 명목 = 가용잔고 × 레버리지 × %  /  청산: 포지션 명목 × %
@@ -198,6 +262,11 @@ function Trade() {
           <div className="hidden lg:flex gap-5 text-xs">
             <div><span className="text-muted mr-1">24h 고가</span><b>{fmt(p.hi)}</b></div>
             <div><span className="text-muted mr-1">24h 저가</span><b>{fmt(p.lo)}</b></div>
+            <div title="펀딩비 · 다음 정산까지">
+              <span className="text-muted mr-1">펀딩</span>
+              <b className={(funding[cur] || 0) >= 0 ? "text-up" : "text-down"}>{(funding[cur] || 0) >= 0 ? "+" : ""}{(funding[cur] || 0).toFixed(3)}%</b>
+              <span className="text-muted2 ml-1.5 tabnum">{String(Math.floor(fundingIn / 60)).padStart(2, "0")}:{String(fundingIn % 60).padStart(2, "0")}</span>
+            </div>
             <div><span className="text-muted mr-1">연결</span><b className={connected ? "text-up" : "text-muted"}>{connected ? "실시간" : "폴백"}</b></div>
           </div>
         )}
@@ -263,11 +332,23 @@ function Trade() {
               <button onClick={() => setSide("buy")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "buy" ? "bg-up text-black border-up" : "bg-panel2 text-muted border-line"}`}>매수</button>
               <button onClick={() => setSide("sell")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "sell" ? "bg-down text-white border-down" : "bg-panel2 text-muted border-line"}`}>매도</button>
             </div>
+            {/* 마진 모드 격리/크로스 */}
+            <div className="flex gap-1 mb-2.5">
+              {[["isolated", "격리"], ["cross", "크로스"]].map(([m, l]) => (
+                <button key={m} onClick={() => setMarginMode(m)}
+                  className={`flex-1 py-1 rounded-md text-[11px] font-semibold border ${marginMode === m ? "bg-panel2 text-ink border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
+              ))}
+            </div>
             {/* 레버리지 슬라이더 (진입 시 적용) */}
             <div className={`mb-2.5 ${!isOpening ? "opacity-40 pointer-events-none" : ""}`}>
               <div className="flex justify-between items-center mb-1">
                 <span className="text-[11px] text-muted">레버리지</span>
-                <span className="text-[11px] font-bold text-brand">{leverage}x</span>
+                <div className="flex items-center gap-1">
+                  <input type="number" min="1" max="125" value={leverage}
+                    onChange={(e) => { const n = Math.max(1, Math.min(125, Math.round(+e.target.value || 1))); setLeverage(n); }}
+                    className="w-12 px-1.5 py-0.5 bg-bg2 border border-line rounded text-ink text-[11px] font-bold text-right outline-none focus:border-brand" />
+                  <span className="text-[11px] font-bold text-brand">x</span>
+                </div>
               </div>
               <input type="range" min="1" max="125" value={leverage} onChange={(e) => setLeverage(+e.target.value)}
                 className="w-full mb-1.5" style={{ accentColor: "var(--brand)" }} />
@@ -333,6 +414,28 @@ function Trade() {
             <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>
               {cur} {isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산")}
             </button>
+            {/* 가격 알림 */}
+            <div className="mt-3 pt-3 border-t border-line">
+              <div className="flex gap-1.5">
+                <input type="number" value={alertPrice} onChange={(e) => setAlertPrice(e.target.value)} placeholder={`${cur} 알림 가격`}
+                  className="flex-1 w-0 px-2.5 py-1.5 bg-bg2 border border-line rounded-lg text-ink text-[12px] outline-none focus:border-brand" />
+                <button onClick={() => {
+                  const ap = parseFloat(alertPrice); if (!(ap > 0)) return toastMsg("알림 가격을 입력하세요");
+                  setAlerts((prev) => [...prev, { id: Date.now(), sym: cur, price: ap, above: ap >= p.px }]);
+                  setAlertPrice(""); toastMsg(`🔔 ${cur} ${ap >= p.px ? "≥" : "≤"} ${ap} 알림 설정`);
+                }} className="px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-brand/40 bg-brand/10 text-brand whitespace-nowrap">🔔 알림</button>
+              </div>
+              {alerts.filter((a) => a.sym === cur).length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {alerts.filter((a) => a.sym === cur).map((a) => (
+                    <button key={a.id} onClick={() => setAlerts((prev) => prev.filter((x) => x.id !== a.id))}
+                      className="text-[10px] px-2 py-0.5 rounded-full bg-panel2 border border-line text-muted hover:text-down">
+                      {a.above ? "≥" : "≤"} {a.price} ✕
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -344,7 +447,7 @@ function Trade() {
             ))}
           </div>
           <div className="flex-1 overflow-auto">
-            {tab === "pos" && <PosTable acct={acct} prices={prices} summary={summary} onClose={closePosition} />}
+            {tab === "pos" && <PosTable acct={acct} prices={prices} summary={summary} onClose={closePosition} onShare={openShare} />}
             {tab === "open" && <OpenTable acct={acct} onCancel={cancel} />}
             {tab === "hist" && <HistTable acct={acct} />}
             {tab === "tape" && <TradeTape trades={recentTrades} sym={cur} dec={coin.dec} />}
@@ -385,6 +488,7 @@ function Trade() {
           onReset={() => { reset(); toastMsg("모의투자 계좌 초기화"); }}
         />
       )}
+      {pnlCard && <PnLCardModal card={pnlCard} uid={uid} onClose={() => setPnlCard(null)} />}
     </div>
   );
 }
@@ -446,6 +550,54 @@ function WalletModal({ wallet, summary, onClose, onDeposit, onWithdraw, onReset 
     </div>
   );
 }
+function PnLCardModal({ card, uid, onClose }) {
+  const up = card.roe >= 0;
+  const roeCol = up ? "#22c55e" : "#f87171";
+  const roeStr = (up ? "+" : "") + card.roe.toFixed(2) + "%";
+  const dec = card.dec ?? 2;
+  const fmt = (v) => v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  const sideKr = card.side === "long" ? "롱 LONG" : "숏 SHORT";
+  const W = 800, H = 450;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter, Arial, sans-serif">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f172a"/><stop offset="1" stop-color="#020617"/></linearGradient>
+      <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#10b981"/></linearGradient>
+    </defs>
+    <rect width="${W}" height="${H}" rx="20" fill="url(#bg)"/>
+    <rect width="${W}" height="7" fill="url(#brand)"/>
+    <text x="44" y="72" font-size="30" font-weight="900" fill="#f1f5f9">VOLTA</text>
+    <text x="44" y="98" font-size="14" fill="#64748b" letter-spacing="3">MOCK TRADING</text>
+    <text x="${W - 44}" y="72" font-size="18" font-weight="700" fill="#94a3b8" text-anchor="end">@${(uid || "guest").slice(0, 16)}</text>
+    <text x="44" y="180" font-size="30" font-weight="800" fill="#f1f5f9">${card.sym}/USDT</text>
+    <text x="44" y="216" font-size="18" font-weight="700" fill="${card.side === "long" ? "#22c55e" : "#f87171"}">${sideKr} · ${card.lev}x</text>
+    <text x="44" y="330" font-size="110" font-weight="900" fill="${roeCol}">${roeStr}</text>
+    <text x="44" y="360" font-size="15" fill="#64748b">누적 수익률 (ROE)</text>
+    <text x="44" y="410" font-size="16" fill="#94a3b8">진입가 ${fmt(card.entry)}    현재가 ${fmt(card.mark)}</text>
+    <text x="${W - 44}" y="410" font-size="13" fill="#475569" text-anchor="end">모의투자 · 가상머니 데모</text>
+  </svg>`;
+  function download() {
+    const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement("canvas"); cv.width = W * 2; cv.height = H * 2;
+      const ctx = cv.getContext("2d"); ctx.scale(2, 2); ctx.drawImage(img, 0, 0);
+      cv.toBlob((b) => { const u = URL.createObjectURL(b); const a = document.createElement("a"); a.href = u; a.download = `volta-pnl-${card.sym}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(u), 1000); });
+    };
+    img.src = url;
+  }
+  return (
+    <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.8)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-[520px]">
+        <div className="rounded-2xl overflow-hidden shadow-2xl" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="flex gap-2 mt-3">
+          <button onClick={download} className="btn btn-primary flex-1 py-3 text-white">이미지 저장 (PNG)</button>
+          <button onClick={onClose} className="btn btn-ghost px-6 py-3">닫기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Stat({ label, val, cls = "", sub }) {
   return (
     <div className="bg-[rgba(255,255,255,.03)] border border-line rounded-xl px-3.5 py-3">
@@ -596,21 +748,42 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   else { rec.dir = dir; rec.leverage = lev; }
   return {
     ...a, cashUSDT: cash, positions,
-    realizedPnL: (a.realizedPnL || 0) + (closing ? realizedGross - fee : 0),
+    realizedPnL: (a.realizedPnL || 0) + (closing ? realizedGross : 0) - fee, // 수수료는 항상 실현손익에 반영 → 미실현+실현=총손익
     history: [rec, ...a.history].slice(0, 200),
   };
 }
 
-/** 청산 검사: 포지션 손실이 마진을 소진하면 강제 청산 */
-function checkLiquidations(a, prices) {
+/** 청산 검사. isolated: 포지션별 마진 소진 시. cross: 계좌 순자산 ≤ 총 유지증거금 시 전량. */
+function checkLiquidations(a, prices, mode = "isolated") {
   let changed = false, na = a, liquidated = [];
+  if (mode === "cross") {
+    const syms = Object.keys(na.positions || {});
+    if (!syms.length) return { wallet: na, changed, liquidated };
+    let equity = na.cashUSDT, maint = 0;
+    for (const s of syms) {
+      const pos = na.positions[s]; const px = prices[s]?.px ?? pos.entry;
+      const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
+      equity += pos.margin + pnl;
+      maint += pos.qty * px * MM;
+    }
+    if (equity <= maint) {   // 마진콜 → 전량 청산
+      for (const s of syms) {
+        const pos = na.positions[s]; const px = prices[s]?.px ?? pos.entry;
+        na = applyFill(na, s, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "liquidation");
+        liquidated.push(s);
+      }
+      changed = true;
+    }
+    return { wallet: na, changed, liquidated };
+  }
+  // isolated
   for (const sym of Object.keys(a.positions || {})) {
     const pos = na.positions[sym];
     if (!pos) continue;
     const px = prices[sym]?.px;
     if (px == null) continue;
     const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
-    if (pos.margin + pnl <= pos.margin * MM) {   // 마진 소진 → 청산
+    if (pos.margin + pnl <= pos.margin * MM) {
       na = applyFill(na, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "liquidation");
       liquidated.push(sym); changed = true;
     }
@@ -641,7 +814,7 @@ function Field({ label, children }) {
 function Th({ children }) { return <th className="px-3 py-2 text-right text-muted font-semibold first:text-left sticky top-0 bg-panel">{children}</th>; }
 function Td({ children, cls = "" }) { return <td className={`px-3 py-2 text-right first:text-left border-b border-line/50 ${cls}`}>{children}</td>; }
 
-function PosTable({ acct, prices, summary, onClose }) {
+function PosTable({ acct, prices, summary, onClose, onShare }) {
   const positions = acct.positions || {};
   const syms = Object.keys(positions);
   const num = (v, d = 2) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
@@ -683,7 +856,12 @@ function PosTable({ acct, prices, summary, onClose }) {
                 <Td cls="tabnum text-down">{num(liq)}</Td>
                 <Td cls="tabnum text-[10px] text-muted2">{pos.tp ? "TP" : ""}{pos.tp && pos.sl ? "/" : ""}{pos.sl ? "SL" : ""}{!pos.tp && !pos.sl ? "-" : ""}</Td>
                 <Td cls={`tabnum font-bold ${pnl >= 0 ? "text-up" : "text-down"}`}>{pnl >= 0 ? "+" : ""}{num(pnl)} <span className="text-[10px]">({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)</span></Td>
-                <Td><button onClick={() => onClose(s)} className="border border-line bg-panel2 px-2.5 py-1 rounded-md text-[11px] hover:text-ink">청산</button></Td>
+                <Td>
+                  <div className="flex gap-1 justify-end">
+                    <button onClick={() => onShare(s)} className="border border-line bg-panel2 px-2 py-1 rounded-md text-[11px] hover:text-brand">공유</button>
+                    <button onClick={() => onClose(s)} className="border border-line bg-panel2 px-2.5 py-1 rounded-md text-[11px] hover:text-ink">청산</button>
+                  </div>
+                </Td>
               </tr>
             );
           })}
