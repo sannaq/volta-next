@@ -551,7 +551,7 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   const dir = side === "buy" ? "long" : "short";
   const fee = qty * price * FEE;
   let cash = a.cashUSDT - fee;
-  let realizedGross = 0, closing = false;
+  let realizedGross = 0, closing = false, closedSide;
   const pos = positions[sym];
   const tp = opts.tp != null && opts.tp !== "" ? Number(opts.tp) : undefined;
   const sl = opts.sl != null && opts.sl !== "" ? Number(opts.sl) : undefined;
@@ -568,29 +568,32 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
     const nq = pos.qty + qty;
     positions[sym] = { side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin, tp: tp ?? pos.tp, sl: sl ?? pos.sl };
   } else {
-    // 반대 방향: 감소/청산 (초과 시 반전)
+    // 반대 방향: 감소/청산 (dust 스냅으로 미세 잔량 방지, 초과 시 반전)
     closing = true;
-    const closeQty = Math.min(qty, pos.qty);
+    closedSide = pos.side;
+    const dust = pos.qty * 0.005;                       // 포지션의 0.5% 이내면 전량 청산으로 스냅
+    const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
     const pnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
     const marginReleased = pos.margin * (closeQty / pos.qty);
     cash += marginReleased + pnl;
     realizedGross += pnl;
     const remain = pos.qty - closeQty;
-    if (remain > 1e-12) {
-      positions[sym] = { side: pos.side, qty: remain, entry: pos.entry, margin: pos.margin - marginReleased };
+    if (remain > dust) {
+      positions[sym] = { side: pos.side, qty: remain, entry: pos.entry, margin: pos.margin - marginReleased, tp: pos.tp, sl: pos.sl };
     } else {
       delete positions[sym];
-      const flip = qty - closeQty;
-      if (flip > 1e-12) {
+      const flip = qty - closeQty;                       // 전량청산 스냅 시 flip<=0 → 반전 없음
+      if (flip > dust) {
         const margin = (flip * price) / lev;
         cash -= margin;
-        positions[sym] = { side: dir, qty: flip, entry: price, margin };
+        positions[sym] = { side: dir, qty: flip, entry: price, margin, tp, sl };
       }
     }
   }
 
-  const rec = { sym, side, dir, qty, price, leverage: lev, fee, kind, t: Date.now() };
-  if (closing) rec.realized = realizedGross - fee;
+  const rec = { sym, side, qty, price, fee, kind, t: Date.now() };
+  if (closing) { rec.reduce = true; rec.dir = closedSide; rec.realized = realizedGross - fee; }
+  else { rec.dir = dir; rec.leverage = lev; }
   return {
     ...a, cashUSDT: cash, positions,
     realizedPnL: (a.realizedPnL || 0) + (closing ? realizedGross - fee : 0),
@@ -788,8 +791,8 @@ function HistTable({ acct }) {
     <div>
       {/* 요약 */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 py-2.5 border-b border-line text-xs bg-panel2/40 sticky top-0 z-10">
-        <span><span className="text-muted mr-1.5">총 거래</span><b className="tabnum">{hist.length}</b></span>
-        <span><span className="text-muted mr-1.5">청산</span><b className="tabnum">{closes.length}</b></span>
+        <span><span className="text-muted mr-1.5">총 체결</span><b className="tabnum">{hist.length}</b></span>
+        <span><span className="text-muted mr-1.5">청산 완료</span><b className="tabnum">{closes.length}</b></span>
         <span><span className="text-muted mr-1.5">승률</span><b className="tabnum">{winRate.toFixed(1)}%</b></span>
         <span><span className="text-muted mr-1.5">누적 실현손익</span>
           <b className={`tabnum ${realizedTotal >= 0 ? "text-up" : "text-down"}`}>{realizedTotal >= 0 ? "+$" : "-$"}{num(Math.abs(realizedTotal))}</b>
