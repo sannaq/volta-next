@@ -617,7 +617,7 @@ function PnLCardModal({ card, uid, onClose }) {
     <text x="44" y="200" font-size="40" font-weight="800" fill="#f1f5f9">${card.sym}/USDT</text>
     <text x="44" y="236" font-size="20" font-weight="800" fill="${sideCol}">${sideKr} · ${card.lev}x</text>
     <text x="44" y="330" font-size="18" fill="#64748b">ROI</text>
-    <text x="40" y="440" font-size="104" font-weight="900" fill="${roeCol}">${roeStr}</text>
+    <text x="44" y="438" font-size="86" font-weight="900" fill="${roeCol}">${roeStr}</text>
     <g stroke="${roeCol}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">${chev}</g>
     <text x="44" y="530" font-size="15" fill="#64748b">진입가</text>
     <text x="44" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.entry)}</text>
@@ -625,6 +625,7 @@ function PnLCardModal({ card, uid, onClose }) {
     <text x="300" y="562" font-size="24" font-weight="700" fill="#f1f5f9">${fmt(card.mark)}</text>
     <text x="${W - 44}" y="${H - 30}" font-size="12" fill="#475569" text-anchor="end">모의투자 · 가상머니 데모</text>
   </svg>`;
+  const svgDisplay = svg.replace(`width="${W}" height="${H}"`, `width="100%" height="100%" style="display:block"`);
   function download() {
     const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     const img = new Image();
@@ -638,7 +639,7 @@ function PnLCardModal({ card, uid, onClose }) {
   return (
     <div className="fixed inset-0 z-[100] bg-[rgba(2,6,23,.8)] backdrop-blur-sm grid place-items-center p-5" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-[420px]">
-        <div className="rounded-2xl overflow-hidden shadow-2xl" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="rounded-2xl overflow-hidden shadow-2xl aspect-square" dangerouslySetInnerHTML={{ __html: svgDisplay }} />
         <div className="flex gap-2 mt-3">
           <button onClick={download} className="btn btn-primary flex-1 py-3 text-white">이미지 저장 (PNG)</button>
           <button onClick={onClose} className="btn btn-ghost px-6 py-3">닫기</button>
