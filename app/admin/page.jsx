@@ -11,7 +11,13 @@ import { supabaseEnabled } from "@/lib/supabase";
  * 실제 회원가입/개인정보/비밀번호를 수집·저장·열람하지 않는다.
  * 로그인 게이트는 데모용 접근제어일 뿐이며 입력값을 저장하지 않는다.
  */
-const DEMO_ADMIN = { id: "admin", pw: "volta-admin" };
+// 관리자 계정: 환경변수(NEXT_PUBLIC_ADMIN_ID / _PW)로 지정, 없으면 기본값.
+// ⚠️ 클라이언트 게이트는 편의용이며 실보안이 아닙니다(번들에 노출). 실서비스는
+//    Supabase role='admin' 서버검증(supabase/schema.sql)으로 전환하세요.
+const DEMO_ADMIN = {
+  id: process.env.NEXT_PUBLIC_ADMIN_ID || "admin",
+  pw: process.env.NEXT_PUBLIC_ADMIN_PW || "volta-admin-2026!",
+};
 const FLAG = "volta_admin_session";
 
 export default function AdminPage() {
@@ -49,7 +55,7 @@ function Gate({ onOk }) {
           <button className="btn btn-primary w-full py-3 mt-5 text-white">로그인</button>
         </form>
         {err && <div className="text-down text-xs text-center mt-3">{err}</div>}
-        <div className="text-muted2 text-[11px] text-center mt-4">데모 계정 — admin / volta-admin</div>
+        <div className="text-muted2 text-[11px] text-center mt-4">관리자 전용 · 계정은 환경변수(NEXT_PUBLIC_ADMIN_ID/_PW)로 설정</div>
       </div>
     </main>
   );

@@ -60,7 +60,7 @@ function Trade() {
 
   // 청산 검사 (레버리지 포지션 가치가 부채 이하로 떨어지면 강제 청산)
   useEffect(() => {
-    if (!acct.holdings || !Object.keys(acct.holdings).length) return;
+    if (!acct.positions || !Object.keys(acct.positions).length) return;
     setAcct((a) => {
       const { wallet, changed, liquidated } = checkLiquidations(a, prices);
       if (changed) setTimeout(() => toastMsg(`⚠️ 청산됨: ${liquidated.join(", ")}`), 0);
@@ -86,22 +86,35 @@ function Trade() {
 
   const book = useMemo(() => genBook(p.px, coin.dec), [p.px, coin.dec]);
 
-  const lev = side === "buy" ? leverage : 1;
+  const posCur = (acct.positions || {})[cur];
+  const orderDir = side === "buy" ? "long" : "short";
+  const isOpening = !posCur || posCur.side === orderDir;   // 진입/추가 vs 감소/청산
   function submit() {
     const q = parseFloat(qty), pr = parseFloat(price);
     if (!(q > 0)) return toastMsg("수량을 입력하세요");
     if (type === "limit" && !(pr > 0)) return toastMsg("가격을 입력하세요");
     const execPx = type === "market" ? p.px : pr;
-    if (side === "buy" && (q * execPx) / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
-    if (side === "sell" && q > (acct.holdings[cur] || 0) + 1e-9) return toastMsg("보유수량 부족");
-    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, lev, "market")); toastMsg(`시장가 ${side === "buy" ? "매수" : "매도"} 체결${side === "buy" && leverage > 1 ? ` (${leverage}x)` : ""}`); }
-    else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr, leverage: lev }] })); toastMsg("지정가 주문 접수"); }
+    // 필요 증거금: 신규/추가 = 전량, 반대매매 = 초과분(반전)만
+    const newQty = isOpening ? q : Math.max(0, q - (posCur?.qty || 0));
+    if ((newQty * execPx) / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
+    const label = isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산");
+    if (type === "market") { setAcct((a) => applyFill(a, cur, side, q, execPx, leverage, "market")); toastMsg(`시장가 ${label}${isOpening && leverage > 1 ? ` (${leverage}x)` : ""}`); }
+    else { setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), sym: cur, side, qty: q, price: pr, leverage }] })); toastMsg("지정가 주문 접수"); }
     setQty("");
   }
   function cancel(id) { setAcct((a) => ({ ...a, openOrders: a.openOrders.filter((o) => o.id !== id) })); toastMsg("주문 취소"); }
+  function closePosition(sym) {
+    setAcct((a) => {
+      const pos = (a.positions || {})[sym]; if (!pos) return a;
+      const px = prices[sym]?.px ?? pos.entry;
+      return applyFill(a, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "market");
+    });
+    toastMsg("포지션 청산");
+  }
   function setPct(pct) {
-    if (side === "buy") { const px = parseFloat(price) || p.px; if (px) setQty(((acct.cashUSDT * leverage * pct) / px).toFixed(coin.qdec)); }
-    else setQty(((acct.holdings[cur] || 0) * pct).toFixed(coin.qdec));
+    const px = parseFloat(price) || p.px; if (!px) return;
+    const maxQty = isOpening ? (acct.cashUSDT * leverage) / px : (posCur?.qty || 0);
+    setQty((maxQty * pct).toFixed(coin.qdec));
   }
 
   const fmt = (v) => v == null ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: coin.dec, maximumFractionDigits: coin.dec });
@@ -186,8 +199,8 @@ function Trade() {
               <button onClick={() => setSide("buy")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "buy" ? "bg-up text-black border-up" : "bg-panel2 text-muted border-line"}`}>매수</button>
               <button onClick={() => setSide("sell")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "sell" ? "bg-down text-white border-down" : "bg-panel2 text-muted border-line"}`}>매도</button>
             </div>
-            {/* 레버리지 */}
-            <div className={`mb-2.5 ${side === "sell" ? "opacity-40 pointer-events-none" : ""}`}>
+            {/* 레버리지 (진입 시 적용, 청산/감소 시 무관) */}
+            <div className={`mb-2.5 ${!isOpening ? "opacity-40 pointer-events-none" : ""}`}>
               <div className="flex justify-between items-center mb-1.5">
                 <span className="text-[11px] text-muted">레버리지</span>
                 <span className="text-[11px] font-bold text-brand">{leverage}x</span>
@@ -216,10 +229,12 @@ function Trade() {
               {[0.25, 0.5, 0.75, 1].map((pct) => <button key={pct} onClick={() => setPct(pct)} className="flex-1 py-1 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">{pct * 100}%</button>)}
             </div>
             <div className="flex justify-between text-[11px] text-muted mb-2">
-              <span>{side === "buy" ? `매수여력 (${leverage}x)` : "보유수량"}</span>
-              <span className="tabnum">{side === "buy" ? "$" + (acct.cashUSDT * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (acct.holdings[cur] || 0).toFixed(coin.qdec) + " " + cur}</span>
+              <span>{isOpening ? `주문여력 (${leverage}x)` : `청산가능 (${orderDir === "long" ? "숏" : "롱"})`}</span>
+              <span className="tabnum">{isOpening ? "$" + (acct.cashUSDT * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
             </div>
-            <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>{cur} {side === "buy" ? "매수" : "매도"}</button>
+            <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>
+              {cur} {isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산")}
+            </button>
           </div>
         </div>
 
@@ -231,7 +246,7 @@ function Trade() {
             ))}
           </div>
           <div className="flex-1 overflow-auto">
-            {tab === "pos" && <PosTable acct={acct} prices={prices} />}
+            {tab === "pos" && <PosTable acct={acct} prices={prices} onClose={closePosition} />}
             {tab === "open" && <OpenTable acct={acct} onCancel={cancel} />}
             {tab === "hist" && <HistTable acct={acct} />}
           </div>
@@ -319,53 +334,77 @@ function Stat({ label, val, cls = "", sub }) {
   );
 }
 
-/** 격리 마진 체결: 매수는 마진만 차감하고 나머지는 차입, 매도는 비례 상환 후 정산. 수수료·실현손익 기록. */
+const MM = 0.005; // 유지증거금 비율
+
+/**
+ * 롱/숏 격리마진 체결.
+ *  side 'buy'  → 롱 증가 / 숏 감소·청산·반전
+ *  side 'sell' → 숏 증가 / 롱 감소·청산·반전
+ * 마진은 진입 시 예수금에서 잠기고, 청산 시 실현손익과 함께 반환. 수수료 항상 차감.
+ */
 function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market") {
   const FEE = brand.feeRate || 0;
-  const h = { ...a.holdings }, b = { ...(a.borrowed || {}) }, e = { ...(a.entry || {}) };
   const lev = Math.max(1, leverage || 1);
-  if (side === "buy") {
-    const notional = qty * price;
-    const margin = notional / lev;
-    const fee = notional * FEE;
-    const prevQty = h[sym] || 0, prevCost = (e[sym] || 0) * prevQty;
-    h[sym] = prevQty + qty;
-    e[sym] = h[sym] > 0 ? (prevCost + qty * price) / h[sym] : price;
-    b[sym] = (b[sym] || 0) + (notional - margin);
-    return {
-      ...a, cashUSDT: a.cashUSDT - margin - fee, holdings: h, borrowed: b, entry: e,
-      history: [{ sym, side, qty, price, leverage: lev, fee, kind, t: Date.now() }, ...a.history].slice(0, 200),
-    };
+  const positions = { ...(a.positions || {}) };
+  const dir = side === "buy" ? "long" : "short";
+  const fee = qty * price * FEE;
+  let cash = a.cashUSDT - fee;
+  let realizedGross = 0, closing = false;
+  const pos = positions[sym];
+
+  if (!pos || pos.qty <= 1e-12) {
+    // 신규 진입
+    const margin = (qty * price) / lev;
+    cash -= margin;
+    positions[sym] = { side: dir, qty, entry: price, margin };
+  } else if (pos.side === dir) {
+    // 같은 방향 추가
+    const margin = (qty * price) / lev;
+    cash -= margin;
+    const nq = pos.qty + qty;
+    positions[sym] = { side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin };
   } else {
-    const have = h[sym] || 0;
-    const q = Math.min(qty, have);
-    if (q <= 0) return a;
-    const entryPx = e[sym] || price;
-    const frac = q / have;
-    const repay = (b[sym] || 0) * frac;
-    const proceeds = q * price;
-    const fee = proceeds * FEE;
-    const realized = q * (price - entryPx) - fee;   // 실현손익(수수료 차감)
-    h[sym] = have - q; b[sym] = (b[sym] || 0) - repay;
-    if (h[sym] < 1e-9) { delete h[sym]; delete b[sym]; delete e[sym]; }
-    return {
-      ...a, cashUSDT: a.cashUSDT + (proceeds - repay - fee), holdings: h, borrowed: b, entry: e,
-      realizedPnL: (a.realizedPnL || 0) + realized,
-      history: [{ sym, side, qty: q, price, fee, realized, kind, t: Date.now() }, ...a.history].slice(0, 200),
-    };
+    // 반대 방향: 감소/청산 (초과 시 반전)
+    closing = true;
+    const closeQty = Math.min(qty, pos.qty);
+    const pnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
+    const marginReleased = pos.margin * (closeQty / pos.qty);
+    cash += marginReleased + pnl;
+    realizedGross += pnl;
+    const remain = pos.qty - closeQty;
+    if (remain > 1e-12) {
+      positions[sym] = { side: pos.side, qty: remain, entry: pos.entry, margin: pos.margin - marginReleased };
+    } else {
+      delete positions[sym];
+      const flip = qty - closeQty;
+      if (flip > 1e-12) {
+        const margin = (flip * price) / lev;
+        cash -= margin;
+        positions[sym] = { side: dir, qty: flip, entry: price, margin };
+      }
+    }
   }
+
+  const rec = { sym, side, dir, qty, price, leverage: lev, fee, kind, t: Date.now() };
+  if (closing) rec.realized = realizedGross - fee;
+  return {
+    ...a, cashUSDT: cash, positions,
+    realizedPnL: (a.realizedPnL || 0) + (closing ? realizedGross - fee : 0),
+    history: [rec, ...a.history].slice(0, 200),
+  };
 }
 
-/** 청산 검사: 포지션 가치 ≤ 부채면 강제 청산 */
+/** 청산 검사: 포지션 손실이 마진을 소진하면 강제 청산 */
 function checkLiquidations(a, prices) {
   let changed = false, na = a, liquidated = [];
-  for (const sym of Object.keys(a.holdings || {})) {
+  for (const sym of Object.keys(a.positions || {})) {
+    const pos = na.positions[sym];
+    if (!pos) continue;
     const px = prices[sym]?.px;
     if (px == null) continue;
-    const value = a.holdings[sym] * px;
-    const debt = (a.borrowed || {})[sym] || 0;
-    if (debt > 0 && value <= debt * 1.005) {   // 유지증거금 0.5%
-      na = applyFill(na, sym, "sell", na.holdings[sym], px, 1, "liquidation");
+    const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
+    if (pos.margin + pnl <= pos.margin * MM) {   // 마진 소진 → 청산
+      na = applyFill(na, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "liquidation");
       liquidated.push(sym); changed = true;
     }
   }
@@ -395,31 +434,35 @@ function Field({ label, children }) {
 function Th({ children }) { return <th className="px-3 py-2 text-right text-muted font-semibold first:text-left sticky top-0 bg-panel">{children}</th>; }
 function Td({ children, cls = "" }) { return <td className={`px-3 py-2 text-right first:text-left border-b border-line/50 ${cls}`}>{children}</td>; }
 
-function PosTable({ acct, prices }) {
-  const rows = Object.keys(acct.holdings || {});
-  const num = (v, d = 2) => v.toLocaleString("en-US", { maximumFractionDigits: d });
+function PosTable({ acct, prices, onClose }) {
+  const positions = acct.positions || {};
+  const syms = Object.keys(positions);
+  const num = (v, d = 2) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
   return (
     <table className="w-full border-collapse text-xs">
-      <thead><tr><Th>포지션</Th><Th>수량</Th><Th>진입가</Th><Th>현재가</Th><Th>레버리지</Th><Th>청산가</Th><Th>평가손익</Th></tr></thead>
+      <thead><tr><Th>포지션</Th><Th>방향</Th><Th>수량</Th><Th>진입가</Th><Th>현재가</Th><Th>레버리지</Th><Th>청산가</Th><Th>평가손익</Th><Th></Th></tr></thead>
       <tbody>
-        <tr><Td>USDT <span className="text-muted2">(예수금)</span></Td><Td cls="tabnum">{num(acct.cashUSDT)}</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td></tr>
-        {rows.map((s) => {
-          const qty = acct.holdings[s], px = prices[s]?.px || 0;
-          const entry = (acct.entry || {})[s] || 0, debt = (acct.borrowed || {})[s] || 0;
-          const notional = qty * entry, margin = notional - debt;
-          const effLev = margin > 0 ? notional / margin : 1;
-          const liq = qty > 0 ? debt / qty : 0;
-          const pnl = qty * (px - entry);
-          const pnlPct = margin > 0 ? (pnl / margin) * 100 : 0;
+        <tr><Td>USDT <span className="text-muted2">(예수금)</span></Td><Td>-</Td><Td cls="tabnum">{num(acct.cashUSDT)}</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td></Td></tr>
+        {syms.map((s) => {
+          const pos = positions[s];
+          const px = prices[s]?.px ?? pos.entry;
+          const notional = pos.qty * pos.entry;
+          const effLev = pos.margin > 0 ? notional / pos.margin : 1;
+          const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
+          const pnlPct = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
+          const off = pos.qty > 0 ? (pos.margin * 0.995) / pos.qty : 0;
+          const liq = pos.side === "long" ? pos.entry - off : pos.entry + off;
           return (
             <tr key={s}>
               <Td>{s}/USDT</Td>
-              <Td cls="tabnum">{num(qty, 6)}</Td>
-              <Td cls="tabnum">{num(entry)}</Td>
+              <Td cls={pos.side === "long" ? "text-up font-bold" : "text-down font-bold"}>{pos.side === "long" ? "롱" : "숏"}</Td>
+              <Td cls="tabnum">{num(pos.qty, 6)}</Td>
+              <Td cls="tabnum">{num(pos.entry)}</Td>
               <Td cls="tabnum">{num(px)}</Td>
-              <Td cls="tabnum">{effLev >= 1.05 ? effLev.toFixed(0) + "x" : "1x"}</Td>
-              <Td cls="tabnum text-down">{debt > 0 ? num(liq) : "-"}</Td>
+              <Td cls="tabnum">{effLev.toFixed(0)}x</Td>
+              <Td cls="tabnum text-down">{num(liq)}</Td>
               <Td cls={`tabnum font-bold ${pnl >= 0 ? "text-up" : "text-down"}`}>{pnl >= 0 ? "+" : ""}{num(pnl)} <span className="text-[10px]">({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)</span></Td>
+              <Td><button onClick={() => onClose(s)} className="border border-line bg-panel2 px-2.5 py-1 rounded-md text-[11px] hover:text-ink">청산</button></Td>
             </tr>
           );
         })}
@@ -441,33 +484,68 @@ function OpenTable({ acct, onCancel }) {
   );
 }
 function HistTable({ acct }) {
+  const [fSym, setFSym] = useState("all");
+  const [fType, setFType] = useState("all");
   const hist = acct.history || [];
   const num = (v, d = 2) => (v ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
   if (!hist.length) return <div className="text-center text-muted2 py-7 text-xs">체결 내역이 없습니다</div>;
-  const closes = hist.filter((h) => h.side === "sell" && h.realized != null);
+
+  const typeOf = (h) => h.kind === "liquidation" ? "liq" : (h.realized != null ? "close" : "entry");
+  const view = hist.filter((h) => (fSym === "all" || h.sym === fSym) && (fType === "all" || typeOf(h) === fType));
+  const symList = [...new Set(hist.map((h) => h.sym))];
+
+  const closes = hist.filter((h) => h.realized != null);
   const wins = closes.filter((h) => h.realized > 0).length;
   const winRate = closes.length ? (wins / closes.length) * 100 : 0;
   const realizedTotal = acct.realizedPnL || 0;
-  const kindLabel = (h) => h.kind === "liquidation" ? "청산" : h.side === "buy" ? "매수" : "매도";
-  const kindCls = (h) => h.kind === "liquidation" ? "text-down font-bold" : h.side === "buy" ? "text-up font-bold" : "text-down font-bold";
+  const label = (h) => h.kind === "liquidation" ? "강제청산" : (h.realized != null ? "청산" : "진입");
+  const labelCls = (h) => h.kind === "liquidation" ? "text-down font-bold" : h.side === "buy" ? "text-up font-bold" : "text-down font-bold";
+  const dirLabel = (h) => h.dir === "long" ? "롱" : h.dir === "short" ? "숏" : "";
+
+  function exportCSV() {
+    const header = ["시간", "마켓", "구분", "방향", "가격", "수량", "레버리지", "수수료(USDT)", "실현손익(USDT)"];
+    const rows = view.map((h) => [
+      new Date(h.t).toISOString(), h.sym + "/USDT", label(h), dirLabel(h),
+      h.price, h.qty, h.leverage || "", (h.fee ?? 0).toFixed(4),
+      h.realized != null ? h.realized.toFixed(4) : "",
+    ].join(","));
+    const csv = [header.join(","), ...rows].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "volta-trades.csv"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   return (
     <div>
       {/* 요약 */}
-      <div className="flex flex-wrap gap-x-5 gap-y-1 px-4 py-2.5 border-b border-line text-xs bg-panel2/40 sticky top-0 z-10">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 py-2.5 border-b border-line text-xs bg-panel2/40 sticky top-0 z-10">
         <span><span className="text-muted mr-1.5">총 거래</span><b className="tabnum">{hist.length}</b></span>
-        <span><span className="text-muted mr-1.5">청산 완료</span><b className="tabnum">{closes.length}</b></span>
+        <span><span className="text-muted mr-1.5">청산</span><b className="tabnum">{closes.length}</b></span>
         <span><span className="text-muted mr-1.5">승률</span><b className="tabnum">{winRate.toFixed(1)}%</b></span>
         <span><span className="text-muted mr-1.5">누적 실현손익</span>
           <b className={`tabnum ${realizedTotal >= 0 ? "text-up" : "text-down"}`}>{realizedTotal >= 0 ? "+$" : "-$"}{num(Math.abs(realizedTotal))}</b>
         </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <select value={fSym} onChange={(e) => setFSym(e.target.value)} className="bg-bg2 border border-line rounded-md px-2 py-1 text-[11px] outline-none">
+            <option value="all">전체 마켓</option>
+            {symList.map((s) => <option key={s} value={s}>{s}/USDT</option>)}
+          </select>
+          <select value={fType} onChange={(e) => setFType(e.target.value)} className="bg-bg2 border border-line rounded-md px-2 py-1 text-[11px] outline-none">
+            <option value="all">전체</option><option value="entry">진입</option><option value="close">청산</option><option value="liq">강제청산</option>
+          </select>
+          <button onClick={exportCSV} className="border border-brand/40 bg-brand/10 text-brand rounded-md px-2.5 py-1 text-[11px] font-semibold hover:bg-brand/20">CSV 내보내기</button>
+        </div>
       </div>
       <table className="w-full border-collapse text-xs">
-        <thead><tr><Th>시간</Th><Th>마켓</Th><Th>구분</Th><Th>가격</Th><Th>수량</Th><Th>레버리지</Th><Th>수수료</Th><Th>실현손익</Th></tr></thead>
-        <tbody>{hist.map((h, i) => (
+        <thead><tr><Th>시간</Th><Th>마켓</Th><Th>구분</Th><Th>방향</Th><Th>가격</Th><Th>수량</Th><Th>레버리지</Th><Th>수수료</Th><Th>실현손익</Th></tr></thead>
+        <tbody>{view.map((h, i) => (
           <tr key={i}>
             <Td cls="text-muted">{new Date(h.t).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</Td>
             <Td>{h.sym}/USDT</Td>
-            <Td cls={kindCls(h)}>{kindLabel(h)}</Td>
+            <Td cls={labelCls(h)}>{label(h)}</Td>
+            <Td cls={h.dir === "long" ? "text-up" : "text-down"}>{dirLabel(h)}</Td>
             <Td cls="tabnum">{num(h.price, 4)}</Td>
             <Td cls="tabnum">{num(h.qty, 6)}</Td>
             <Td cls="tabnum">{h.leverage ? h.leverage + "x" : "-"}</Td>
