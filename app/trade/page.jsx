@@ -359,6 +359,32 @@ function Trade() {
             {book.bids.map((b, i) => <BookRow key={"b" + i} row={b} kind="bid" max={book.max} fmt={fmt} onClick={() => setPrice(b.p.toFixed(coin.dec))} />)}
           </div>
           <div className="border-t border-line p-3">
+            {/* 내 포지션 (현재 종목) — 평균 진입단가 */}
+            {posCur && (() => {
+              const effLev = posCur.margin > 0 ? Math.round((posCur.qty * posCur.entry) / posCur.margin) : 1;
+              const pnl = (posCur.side === "long" ? (p.px - posCur.entry) : (posCur.entry - p.px)) * posCur.qty;
+              const pnlPct = posCur.margin > 0 ? (pnl / posCur.margin) * 100 : 0;
+              return (
+                <div className="mb-2.5 rounded-lg bg-panel2 border border-line p-2.5 text-xs">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-muted">내 포지션</span>
+                    <span className={`font-bold ${posCur.side === "long" ? "text-up" : "text-down"}`}>{posCur.side === "long" ? "롱" : "숏"} · {effLev}x</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-muted">평균 진입가</span>
+                    <span className="tabnum font-bold text-[13px]">{fmt(posCur.entry)}</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-muted">수량</span>
+                    <span className="tabnum">{posCur.qty.toFixed(coin.qdec)} {cur}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted">미실현손익</span>
+                    <span className={`tabnum font-bold ${pnl >= 0 ? "text-up" : "text-down"}`}>{pnl >= 0 ? "+" : ""}{pnl.toLocaleString("en-US", { maximumFractionDigits: 2 })} <span className="text-[10px]">({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)</span></span>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="flex gap-1.5 mb-2.5">
               <button onClick={() => setSide("buy")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "buy" ? "bg-up text-black border-up" : "bg-panel2 text-muted border-line"}`}>매수</button>
               <button onClick={() => setSide("sell")} className={`flex-1 py-2 rounded-lg border font-bold ${side === "sell" ? "bg-down text-white border-down" : "bg-panel2 text-muted border-line"}`}>매도</button>
