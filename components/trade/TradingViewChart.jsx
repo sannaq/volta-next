@@ -31,6 +31,12 @@ export default function TradingViewChart({ symbol = "BINANCE:BTCUSDT", interval 
         allow_symbol_change: false,
         backgroundColor: "#0f1117",
         gridColor: "rgba(35,40,56,0.6)",
+        withdateranges: true,
+        details: true,
+        studies: [
+          "Volume@tv-basicstudies",
+          "AccumulationDistribution@tv-basicstudies",
+        ],
       });
     }
 

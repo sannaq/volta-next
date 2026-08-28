@@ -6,7 +6,10 @@ import { brand } from "@/lib/brand.config";
 import { useBinanceStream } from "@/lib/useBinanceStream";
 import { useWallet, walletSummary } from "@/lib/useWallet";
 import { recordProfit } from "@/lib/tracking";
+import { supabase, supabaseEnabled } from "@/lib/supabase";
 import TradingViewChart from "@/components/trade/TradingViewChart";
+
+const ADMIN_ID = process.env.NEXT_PUBLIC_ADMIN_ID || "admin";
 
 const TF = [["1", "1m"], ["5", "5m"], ["15", "15m"], ["60", "1H"], ["240", "4H"], ["D", "1D"]];
 
@@ -532,10 +535,7 @@ function Trade() {
       {/* 마이페이지 */}
       {view === "mypage" && (
         <div className="flex-1 min-h-0 overflow-auto p-3 lg:p-6">
-          <MyPageView acct={acct} summary={summary} series={equitySeries} uid={uid}
-            onDeposit={(v) => { deposit(v); toastMsg(`가상자금 ${v.toLocaleString()} USDT 충전`); }}
-            onWithdraw={(v) => { withdraw(v); toastMsg(`가상자금 ${v.toLocaleString()} USDT 출금`); }}
-            onReset={() => { reset(); toastMsg("모의투자 계좌 초기화"); }} />
+          <MyPageView acct={acct} summary={summary} series={equitySeries} uid={uid} isAdmin={uid === ADMIN_ID} />
         </div>
       )}
 
@@ -677,17 +677,16 @@ function Stat({ label, val, cls = "", sub }) {
   );
 }
 
-function MyPageView({ acct, summary, series, uid, onDeposit, onWithdraw, onReset }) {
-  const [amt, setAmt] = useState("");
-  const quick = [100, 500, 1000, 5000];
-  const v = parseInt(amt, 10) || 0;
+function MyPageView({ acct, summary, series, uid, isAdmin }) {
   const up = summary.pnl >= 0;
   const num = (n, d = 2) => (n ?? 0).toLocaleString("en-US", { maximumFractionDigits: d });
   const realized = acct.realizedPnL || 0;
   const openPositions = Object.keys(acct.positions || {}).length;
   const trades = (acct.history || []).length;
   return (
-    <div className="max-w-[1100px] mx-auto grid lg:grid-cols-[1.3fr_1fr] gap-4">
+    <div className="max-w-[1100px] mx-auto flex flex-col gap-4">
+    {isAdmin && <MemberRoster meId={uid} />}
+    <div className="grid lg:grid-cols-[1.3fr_1fr] gap-4">
       {/* 좌: 계정 + 요약 + 자산추이 */}
       <div className="flex flex-col gap-4">
         <div className="card !rounded-xl p-5">
@@ -747,6 +746,75 @@ function MyPageView({ acct, summary, series, uid, onDeposit, onWithdraw, onReset
           </div>
         )}
       </div>
+    </div>
+    </div>
+  );
+}
+
+function MemberRoster({ meId }) {
+  const [wallets, setWallets] = useState([]);
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    let alive = true;
+    const load = () => supabase.from("wallets").select("username,data,updated_at").order("updated_at", { ascending: false }).then(({ data }) => { if (alive) setWallets(data || []); }, () => {});
+    load(); const t = setInterval(load, 5000); return () => { alive = false; clearInterval(t); };
+  }, []);
+  const money = (v) => "$" + (Number(v) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const ago = (t) => { const m = Math.floor((Date.now() - new Date(t).getTime()) / 60000); if (m < 1) return "방금"; if (m < 60) return m + "분 전"; const h = Math.floor(m / 60); if (h < 24) return h + "시간 전"; return Math.floor(h / 24) + "일 전"; };
+  const posText = (d) => {
+    const p = d?.positions || {}; const ks = Object.keys(p);
+    if (!ks.length) return <span className="text-muted2">대기</span>;
+    return ks.map((s) => <span key={s} className={`mr-2 ${p[s].side === "long" ? "text-up" : "text-down"}`}>{s} {p[s].side === "long" ? "롱" : "숏"} {(+p[s].qty).toFixed(3)}</span>);
+  };
+  return (
+    <div className="card !rounded-xl overflow-hidden">
+      <div className="flex items-center flex-wrap gap-2 px-5 py-3 border-b border-line">
+        <h3 className="text-sm font-extrabold">회원 관리</h3>
+        <span className="text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2 py-0.5">관리자 전용</span>
+        <span className="text-[11px] text-muted2">({wallets.length}명 · 5초마다 갱신)</span>
+        <Link href="/admin" className="ml-auto btn btn-primary px-3 py-1.5 text-white text-xs">관리자 페이지 (자금지급·초기화)</Link>
+      </div>
+      {/* 권한 안내 */}
+      <div className="px-5 py-3 border-b border-line grid sm:grid-cols-2 gap-2 text-[11px]">
+        <div className="bg-brand/10 border border-brand/30 rounded-lg px-3 py-2">
+          <b className="text-brand">관리자 (나)</b> — 전체 회원 감시 · 자금 지급 · 계좌 초기화
+        </div>
+        <div className="bg-panel2 border border-line rounded-lg px-3 py-2">
+          <b className="text-muted">일반 회원</b> — 모의 거래만 (충전·출금·초기화 불가)
+        </div>
+      </div>
+      {!supabaseEnabled ? (
+        <div className="text-center text-muted2 py-6 text-xs">Supabase 연결 시 회원 목록이 표시됩니다.</div>
+      ) : wallets.length === 0 ? (
+        <div className="text-center text-muted2 py-6 text-xs">아직 활동한 회원이 없습니다.</div>
+      ) : (
+        <div className="overflow-auto max-h-[320px]">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="text-muted">
+                {["아이디", "역할", "예수금", "실현손익", "지금 뭐하는지", "최근활동"].map((h) => (
+                  <th key={h} className="px-4 py-2.5 text-right first:text-left sticky top-0 bg-panel font-semibold">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {wallets.map((w) => {
+                const d = w.data || {}; const rp = d.realizedPnL || 0; const me = w.username === meId;
+                return (
+                  <tr key={w.username} className="border-b border-line/40">
+                    <td className="px-4 py-2.5 font-semibold">{w.username}{me && <span className="text-brand text-[10px] ml-1">(나)</span>}</td>
+                    <td className="px-4 py-2.5 text-right">{me ? <span className="text-brand font-bold">관리자</span> : <span className="text-muted">회원</span>}</td>
+                    <td className="px-4 py-2.5 text-right tabnum">{money(d.cashUSDT)}</td>
+                    <td className={`px-4 py-2.5 text-right tabnum font-bold ${rp >= 0 ? "text-up" : "text-down"}`}>{rp >= 0 ? "+" : ""}{money(rp).slice(1)}</td>
+                    <td className="px-4 py-2.5 text-right text-[11px]">{posText(d)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted">{ago(w.updated_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
