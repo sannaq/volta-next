@@ -186,6 +186,8 @@ function Trade() {
   const posCur = (acct.positions || {})[cur];
   const orderDir = side === "buy" ? "long" : "short";
   const isOpening = !posCur || posCur.side === orderDir;   // 진입/추가 vs 감소/청산
+  // 주문 증거금 기준: 격리=가용예수금 / 크로스=예수금+미실현이익(계좌 전체 담보)
+  const freeBase = Math.max(0, marginMode === "cross" ? acct.cashUSDT + summary.upnl : acct.cashUSDT);
   function submit() {
     const amt = parseFloat(amount), pr = parseFloat(price), tr = parseFloat(trigger);
     if (!(amt > 0)) return toastMsg("금액을 입력하세요");
@@ -207,7 +209,7 @@ function Trade() {
     const opts = { tp: tp || undefined, sl: sl || undefined };
     // 필요 증거금: 신규 진입/추가분만 (반대매매 청산분은 증거금 불필요)
     const openNotional = isOpening ? amt : Math.max(0, (q - (posCur?.qty || 0)) * refPx);
-    if (openNotional / leverage > acct.cashUSDT + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
+    if (openNotional / leverage > freeBase + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
     const label = isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산");
     if (type === "market") {
       setAcct((a) => applyFill(a, cur, side, q, p.px, leverage, "market", opts));
@@ -242,8 +244,8 @@ function Trade() {
   }
   function setPct(pct) {
     const px = parseFloat(price) || p.px; if (!px) return;
-    // 진입: 명목 = 가용잔고 × 레버리지 × %  /  청산: 포지션 명목 × %
-    const notional = isOpening ? acct.cashUSDT * leverage * pct : (posCur?.qty || 0) * px * pct;
+    // 진입: 명목 = 주문여력 × 레버리지 × %  /  청산: 포지션 명목 × %
+    const notional = isOpening ? freeBase * leverage * pct : (posCur?.qty || 0) * px * pct;
     setAmount(notional.toFixed(2));
   }
 
@@ -427,8 +429,8 @@ function Trade() {
               </div>
             )}
             <div className="flex justify-between text-[11px] text-muted mb-2">
-              <span>{isOpening ? `주문여력 (${leverage}x)` : `청산가능 (${orderDir === "long" ? "숏" : "롱"})`}</span>
-              <span className="tabnum">{isOpening ? "$" + (acct.cashUSDT * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
+              <span>{isOpening ? `주문여력 (${leverage}x·${marginMode === "cross" ? "크로스" : "격리"})` : `청산가능 (${orderDir === "long" ? "숏" : "롱"})`}</span>
+              <span className="tabnum">{isOpening ? "$" + (freeBase * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
             </div>
             <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>
               {cur} {isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산")}
