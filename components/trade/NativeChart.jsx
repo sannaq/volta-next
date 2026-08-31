@@ -10,7 +10,7 @@ import { createChart } from "lightweight-charts";
  */
 const IV = [["1m", "1분"], ["5m", "5분"], ["15m", "15분"], ["1h", "1시간"], ["4h", "4시간"], ["1d", "1일"]];
 const IVMS = { "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
-const LINES = [["ribbon", "리본"], ["struct", "구조"], ["signal", "신호"], ["sr", "지지/저항"], ["tr", "추세선"], ["ch", "회귀채널"], ["ema", "EMA"], ["poc", "매물대"], ["fib", "피보"], ["ob", "OB"]];
+const LINES = [["cloud", "구름"], ["ribbon", "리본"], ["struct", "구조"], ["signal", "신호"], ["sr", "지지/저항"], ["tr", "추세선"], ["ch", "회귀채널"], ["ema", "EMA"], ["poc", "매물대"], ["fib", "피보"], ["ob", "OB"]];
 
 function toBars(raw) { return raw.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })); }
 function ema(v, p) { var k = 2 / (p + 1), e = v[0], o = [e], i; for (i = 1; i < v.length; i++) { e = v[i] * k + e * (1 - k); o.push(e); } return o; }
@@ -18,13 +18,52 @@ function ema(v, p) { var k = 2 / (p + 1), e = v[0], o = [e], i; for (i = 1; i < 
 function rsiArr(cl, p = 14) { const out = new Array(cl.length).fill(null); if (cl.length < p + 1) return out; let g = 0, l = 0; for (let i = 1; i <= p; i++) { const d = cl[i] - cl[i - 1]; if (d >= 0) g += d; else l -= d; } g /= p; l /= p; out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l); for (let i = p + 1; i < cl.length; i++) { const d = cl[i] - cl[i - 1], gg = d > 0 ? d : 0, ll = d < 0 ? -d : 0; g = (g * (p - 1) + gg) / p; l = (l * (p - 1) + ll) / p; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } return out; }
 function pivots(d, w, type) { var r = []; for (var i = w; i < d.length - w; i++) { var ok = true; for (var j = i - w; j <= i + w; j++) { if (j === i) continue; if (type === "low" && d[j].low < d[i].low) { ok = false; break; } if (type === "high" && d[j].high > d[i].high) { ok = false; break; } } if (ok) r.push(i); } return r; }
 function volProfile(bars) { if (!bars.length) return null; var lo = Infinity, hi = -Infinity; bars.forEach(function (k) { if (k.low < lo) lo = k.low; if (k.high > hi) hi = k.high; }); var bins = 24, w = (hi - lo) / bins; if (!(w > 0)) return null; var vol = new Array(bins).fill(0); bars.forEach(function (k) { var tp = (k.high + k.low + k.close) / 3, idx = Math.floor((tp - lo) / w); if (idx < 0) idx = 0; if (idx >= bins) idx = bins - 1; vol[idx] += k.volume; }); var mi = 0; for (var i = 1; i < bins; i++) if (vol[i] > vol[mi]) mi = i; return { low: lo + mi * w, high: lo + (mi + 1) * w }; }
+// 두 이평(fast/slow) 사이를 채우는 구름 프리미티브 — 상승(fast≥slow) 초록 / 하락 빨강
+function makeCloud(getData) {
+  return {
+    _series: null, _chart: null,
+    attached(p) { this._chart = p.chart; this._series = p.series; },
+    detached() { this._chart = null; this._series = null; },
+    updateAllViews() {},
+    paneViews() {
+      const self = this;
+      return [{
+        zOrder: () => "bottom",
+        renderer: () => ({
+          draw: (target) => {
+            try {
+              const d = getData(); if (!d || !d.times || d.times.length < 2 || !self._series || !self._chart) return;
+              const ts = self._chart.timeScale();
+              target.useBitmapCoordinateSpace((scope) => {
+                const ctx = scope.context, hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
+                for (let i = 1; i < d.times.length; i++) {
+                  const x0 = ts.timeToCoordinate(d.times[i - 1]), x1 = ts.timeToCoordinate(d.times[i]);
+                  if (x0 == null || x1 == null) continue;
+                  const a0 = self._series.priceToCoordinate(d.fast[i - 1]), a1 = self._series.priceToCoordinate(d.fast[i]);
+                  const b0 = self._series.priceToCoordinate(d.slow[i - 1]), b1 = self._series.priceToCoordinate(d.slow[i]);
+                  if (a0 == null || a1 == null || b0 == null || b1 == null) continue;
+                  const bull = d.fast[i] >= d.slow[i];
+                  ctx.fillStyle = bull ? "rgba(46,189,133,0.16)" : "rgba(246,70,93,0.16)";
+                  ctx.beginPath();
+                  ctx.moveTo(x0 * hr, a0 * vr); ctx.lineTo(x1 * hr, a1 * vr);
+                  ctx.lineTo(x1 * hr, b1 * vr); ctx.lineTo(x0 * hr, b0 * vr);
+                  ctx.closePath(); ctx.fill();
+                }
+              });
+            } catch (e) { /* 구름 렌더 실패해도 차트는 유지 */ }
+          },
+        }),
+      }];
+    },
+  };
+}
 function findOrderBlocks(cs, cur) { var n = cs.length; if (n < 8) return []; var s = 0; for (var i = 0; i < n; i++) s += (cs[i].high - cs[i].low); var avg = s / n; if (!(avg > 0)) return []; var bl = [], br = []; for (var i2 = 2; i2 < n - 2; i2++) { var a = cs[i2], b = cs[i2 + 1], bb = Math.abs(b.close - b.open); if (a.close < a.open && b.close > b.open && bb > avg * 1.1 && b.close > a.high) bl.push({ type: "bull", top: a.high, bottom: a.low, idx: i2 }); if (a.close > a.open && b.close < b.open && bb > avg * 1.1 && b.close < a.low) br.push({ type: "bear", top: a.high, bottom: a.low, idx: i2 }); } function fresh(o) { for (var j = o.idx + 2; j < n; j++) { if (o.type === "bull" && cs[j].low < o.bottom) return false; if (o.type === "bear" && cs[j].high > o.top) return false; } return true; } var out = []; bl.filter(fresh).filter(function (o) { return o.top <= cur; }).slice(-2).forEach(function (o) { out.push(o); }); br.filter(fresh).filter(function (o) { return o.bottom >= cur; }).slice(-2).forEach(function (o) { out.push(o); }); return out; }
 
 export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
   const wrapRef = useRef(null);
   const legendRef = useRef(null);
   const [tf, setTf] = useState("15m");
-  const [lineOn, setLineOn] = useState({ ribbon: true, struct: true, signal: true, sr: true, tr: false, ch: false, ema: false, poc: true, fib: false, ob: true });
+  const [lineOn, setLineOn] = useState({ cloud: true, ribbon: true, struct: true, signal: true, sr: true, tr: false, ch: false, ema: false, poc: true, fib: false, ob: true });
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -88,9 +127,19 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
       // 골드 스윙 추세선
       if (lineOn.tr) { const up = data[data.length - 1].close >= data[0].close; let pv = pivots(data, 4, up ? "low" : "high"); if (pv.length < 2) pv = pivots(data, 3, up ? "low" : "high"); if (pv.length >= 2) { let anchor = pv[0]; for (let k = 0; k < pv.length; k++) { if (up) { if (data[pv[k]].low < data[anchor].low) anchor = pv[k]; } else { if (data[pv[k]].high > data[anchor].high) anchor = pv[k]; } } let later = null; for (let m = pv.length - 1; m >= 0; m--) { if (pv[m] > anchor) { later = pv[m]; break; } } if (later == null) { const idx = pv.indexOf(anchor); if (idx > 0) { later = anchor; anchor = pv[idx - 1]; } } if (later != null && later > anchor) { const pa = up ? data[anchor].low : data[anchor].high, pb = up ? data[later].low : data[later].high, slope = (pb - pa) / (later - anchor); const ts = chart.addLineSeries({ color: "#e0a83e", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }); const pts = []; for (let ii = anchor; ii < data.length; ii++) pts.push({ time: data[ii].time, value: pa + slope * (ii - anchor) }); ts.setData(pts); } } }
 
-      // ── 트렌드 리본(상승 파랑 / 하락 빨강) ──
       const markers = [];
       const clz2 = data.map((d) => d.close);
+      // ── 구름 이평: EMA9/EMA26 사이 채움(상승 초록/하락 빨강) + 경계선 ──
+      if (lineOn.cloud) {
+        const f = ema(clz2, 9), s = ema(clz2, 26);
+        const times = data.map((d) => d.time);
+        try { cs.attachPrimitive(makeCloud(() => ({ times, fast: f, slow: s }))); } catch (e) {}
+        const fS = chart.addLineSeries({ color: "rgba(46,189,133,0.9)", lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        const sS = chart.addLineSeries({ color: "rgba(246,70,93,0.9)", lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        fS.setData(data.map((d, i) => ({ time: d.time, value: f[i] })));
+        sS.setData(data.map((d, i) => ({ time: d.time, value: s[i] })));
+      }
+      // ── 트렌드 리본(상승 파랑 / 하락 빨강) ──
       const rib = ema(clz2, 21);
       if (lineOn.ribbon) {
         const upS = chart.addLineSeries({ color: "#3b82f6", lineWidth: 3, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
