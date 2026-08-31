@@ -963,7 +963,8 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   const lev = Math.max(1, leverage || 1);
   const positions = { ...(a.positions || {}) };
   const dir = side === "buy" ? "long" : "short";
-  const fee = qty * price * FEE;
+  // 강제청산은 수수료 면제 → 손실이 정확히 증거금까지만(-100%), 계좌 음수 방지
+  const fee = kind === "liquidation" ? 0 : qty * price * FEE;
   let cash = a.cashUSDT - fee;
   let realizedGross = 0, closing = false, closedSide, closeEntry, closeLev, closeRoe;
   const pos = positions[sym];
