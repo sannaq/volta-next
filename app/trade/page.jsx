@@ -108,7 +108,7 @@ function Trade({ sessionUid }) {
           notes.push(`${tpHit ? "익절" : "손절"} ${sym}`); changed = true;
         }
       }
-      const liq = checkLiquidations(na, prices, marginMode);
+      const liq = checkLiquidations(na, prices);
       if (liq.changed) { na = liq.wallet; notes.push(`⚠️청산 ${liq.liquidated.join(",")}`); changed = true; }
       if (changed) setTimeout(() => toastMsg(notes.join(" · ")), 0);
       return changed ? na : a;
@@ -956,8 +956,10 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
     closedSide = pos.side;
     const dust = pos.qty * 0.005;                       // 포지션의 0.5% 이내면 전량 청산으로 스냅
     const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
-    const pnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
     const marginReleased = pos.margin * (closeQty / pos.qty);
+    const rawPnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
+    // 청산 시 손실은 증거금까지만 (계좌 음수 방지, 최대 -100%)
+    const pnl = kind === "liquidation" ? Math.max(rawPnl, -marginReleased) : rawPnl;
     cash += marginReleased + pnl;
     realizedGross += pnl;
     closeEntry = pos.entry;
@@ -988,32 +990,13 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
 }
 
 /** 청산 검사. isolated: 포지션별 마진 소진 시. cross: 계좌 순자산 ≤ 총 유지증거금 시 전량. */
-function checkLiquidations(a, prices, mode = "isolated") {
+function checkLiquidations(a, prices) {
+  // 모드 무관 포지션별 청산: 각 포지션 손실이 증거금을 소진하면(≈-100%) 전량 청산.
+  // → 어떤 포지션도 -100% 아래로 물리지 않고, 계좌가 음수로 빠지지 않음.
   let changed = false, na = a, liquidated = [];
-  if (mode === "cross") {
-    const syms = Object.keys(na.positions || {});
-    if (!syms.length) return { wallet: na, changed, liquidated };
-    let equity = na.cashUSDT, maint = 0;
-    for (const s of syms) {
-      const pos = na.positions[s]; const px = prices[s]?.px ?? pos.entry;
-      const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
-      equity += pos.margin + pnl;
-      maint += pos.qty * px * MM;
-    }
-    if (equity <= maint) {   // 마진콜 → 전량 청산
-      for (const s of syms) {
-        const pos = na.positions[s]; const px = prices[s]?.px ?? pos.entry;
-        na = applyFill(na, s, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "liquidation");
-        liquidated.push(s);
-      }
-      changed = true;
-    }
-    return { wallet: na, changed, liquidated };
-  }
-  // isolated
-  for (const sym of Object.keys(a.positions || {})) {
+  for (const sym of Object.keys(na.positions || {})) {
     const pos = na.positions[sym];
-    if (!pos) continue;
+    if (!pos || pos.qty <= 1e-12) continue;
     const px = prices[sym]?.px;
     if (px == null) continue;
     const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
