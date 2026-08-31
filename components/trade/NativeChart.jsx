@@ -14,6 +14,8 @@ const LINES = [["ribbon", "리본"], ["struct", "구조"], ["signal", "신호"],
 
 function toBars(raw) { return raw.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })); }
 function ema(v, p) { var k = 2 / (p + 1), e = v[0], o = [e], i; for (i = 1; i < v.length; i++) { e = v[i] * k + e * (1 - k); o.push(e); } return o; }
+// RSI(Wilder) 배열 — 앞 p개는 null
+function rsiArr(cl, p = 14) { const out = new Array(cl.length).fill(null); if (cl.length < p + 1) return out; let g = 0, l = 0; for (let i = 1; i <= p; i++) { const d = cl[i] - cl[i - 1]; if (d >= 0) g += d; else l -= d; } g /= p; l /= p; out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l); for (let i = p + 1; i < cl.length; i++) { const d = cl[i] - cl[i - 1], gg = d > 0 ? d : 0, ll = d < 0 ? -d : 0; g = (g * (p - 1) + gg) / p; l = (l * (p - 1) + ll) / p; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } return out; }
 function pivots(d, w, type) { var r = []; for (var i = w; i < d.length - w; i++) { var ok = true; for (var j = i - w; j <= i + w; j++) { if (j === i) continue; if (type === "low" && d[j].low < d[i].low) { ok = false; break; } if (type === "high" && d[j].high > d[i].high) { ok = false; break; } } if (ok) r.push(i); } return r; }
 function volProfile(bars) { if (!bars.length) return null; var lo = Infinity, hi = -Infinity; bars.forEach(function (k) { if (k.low < lo) lo = k.low; if (k.high > hi) hi = k.high; }); var bins = 24, w = (hi - lo) / bins; if (!(w > 0)) return null; var vol = new Array(bins).fill(0); bars.forEach(function (k) { var tp = (k.high + k.low + k.close) / 3, idx = Math.floor((tp - lo) / w); if (idx < 0) idx = 0; if (idx >= bins) idx = bins - 1; vol[idx] += k.volume; }); var mi = 0; for (var i = 1; i < bins; i++) if (vol[i] > vol[mi]) mi = i; return { low: lo + mi * w, high: lo + (mi + 1) * w }; }
 function findOrderBlocks(cs, cur) { var n = cs.length; if (n < 8) return []; var s = 0; for (var i = 0; i < n; i++) s += (cs[i].high - cs[i].low); var avg = s / n; if (!(avg > 0)) return []; var bl = [], br = []; for (var i2 = 2; i2 < n - 2; i2++) { var a = cs[i2], b = cs[i2 + 1], bb = Math.abs(b.close - b.open); if (a.close < a.open && b.close > b.open && bb > avg * 1.1 && b.close > a.high) bl.push({ type: "bull", top: a.high, bottom: a.low, idx: i2 }); if (a.close > a.open && b.close < b.open && bb > avg * 1.1 && b.close < a.low) br.push({ type: "bear", top: a.high, bottom: a.low, idx: i2 }); } function fresh(o) { for (var j = o.idx + 2; j < n; j++) { if (o.type === "bull" && cs[j].low < o.bottom) return false; if (o.type === "bear" && cs[j].high > o.top) return false; } return true; } var out = []; bl.filter(fresh).filter(function (o) { return o.top <= cur; }).slice(-2).forEach(function (o) { out.push(o); }); br.filter(fresh).filter(function (o) { return o.bottom >= cur; }).slice(-2).forEach(function (o) { out.push(o); }); return out; }
@@ -111,11 +113,17 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
         if (sh.length) { const i = sh[sh.length - 1]; const strong = sh.length >= 2 && data[i].high > data[sh[sh.length - 2]].high; cs.createPriceLine({ price: data[i].high, color: "#f6465d", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: (strong ? "강한" : "약한") + " 고점" }); }
         if (sl.length) { const i = sl[sl.length - 1]; const strong = sl.length >= 2 && data[i].low > data[sl[sl.length - 2]].low; cs.createPriceLine({ price: data[i].low, color: "#4a9eff", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: (strong ? "강한" : "약한") + " 저점" }); }
       }
-      // ── 매수/매도 신호: 리본 상향/하향 돌파 ──
+      // ── 매수/매도 신호: 리본 돌파 + RSI 모멘텀 확인 + 쿨다운(노이즈 제거) ──
       if (lineOn.signal) {
+        const rsi = rsiArr(clz2, 14);
+        const COOL = 8; let lastLong = -99, lastShort = -99;
         for (let i = 1; i < data.length; i++) {
-          if (clz2[i] > rib[i] && clz2[i - 1] <= rib[i - 1]) markers.push({ time: data[i].time, position: "belowBar", color: "#26de81", shape: "circle" });
-          else if (clz2[i] < rib[i] && clz2[i - 1] >= rib[i - 1]) markers.push({ time: data[i].time, position: "aboveBar", color: "#f6465d", shape: "circle" });
+          if (rsi[i] == null) continue;
+          const buX = clz2[i] > rib[i] && clz2[i - 1] <= rib[i - 1];   // 리본 상향 돌파
+          const seX = clz2[i] < rib[i] && clz2[i - 1] >= rib[i - 1];   // 리본 하향 돌파
+          const rUp = rsi[i] > rsi[i - 1];
+          if (buX && rsi[i] >= 50 && rsi[i] < 72 && rUp && i - lastLong >= COOL) { markers.push({ time: data[i].time, position: "belowBar", color: "#26de81", shape: "arrowUp", text: "매수" }); lastLong = i; }
+          else if (seX && rsi[i] <= 50 && rsi[i] > 28 && !rUp && i - lastShort >= COOL) { markers.push({ time: data[i].time, position: "aboveBar", color: "#f6465d", shape: "arrowDown", text: "매도" }); lastShort = i; }
         }
       }
       if (markers.length) { markers.sort((a, b) => a.time - b.time); cs.setMarkers(markers); }
