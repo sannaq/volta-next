@@ -986,7 +986,9 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
     // 반대 방향: 감소/청산 (dust 스냅으로 미세 잔량 방지, 초과 시 반전)
     closing = true;
     closedSide = pos.side;
-    const dust = pos.qty * 0.005;                       // 포지션의 0.5% 이내면 전량 청산으로 스냅
+    // 전량청산 스냅: 금액(USDT) 기반 청산은 체결 직전 가격변동으로 미세 잔량이 남을 수 있음.
+    // 포지션의 2% 또는 명목 $1 이내면 전량 청산으로 스냅 → "청산했는데 자산이 흔들림" 방지.
+    const dust = Math.max(pos.qty * 0.02, price > 0 ? 1 / price : 0);
     const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
     const marginReleased = pos.margin * (closeQty / pos.qty);
     const rawPnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
