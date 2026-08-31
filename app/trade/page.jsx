@@ -8,6 +8,7 @@ import { useWallet, walletSummary } from "@/lib/useWallet";
 import { recordProfit } from "@/lib/tracking";
 import { supabase, supabaseEnabled } from "@/lib/supabase";
 import TradingViewChart from "@/components/trade/TradingViewChart";
+import LiquidationMap from "@/components/trade/LiquidationMap";
 
 const ADMIN_ID = process.env.NEXT_PUBLIC_ADMIN_ID || "admin";
 
@@ -293,7 +294,7 @@ function Trade({ sessionUid }) {
         </Link>
         {/* 상단 네비게이션 탭 */}
         <nav className="flex items-center gap-1">
-          {[["trade", "투자"], ["history", "거래 내역"], ["mypage", "마이페이지"]].map(([v, l]) => (
+          {[["trade", "투자"], ["liq", "🔥 청산맵"], ["history", "거래 내역"], ["mypage", "마이페이지"]].map(([v, l]) => (
             <button key={v} onClick={() => setView(v)}
               className={`px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition ${view === v ? "bg-panel2 text-ink" : "text-muted hover:text-ink"}`}>{l}</button>
           ))}
@@ -534,6 +535,15 @@ function Trade({ sessionUid }) {
           </div>
         </div>
       </div>
+      )}
+
+      {/* 🔥 청산맵 */}
+      {view === "liq" && (
+        <div className="flex-1 min-h-0 overflow-auto p-3 lg:p-6">
+          <div className="max-w-[1200px] mx-auto card !rounded-xl p-4 lg:p-5">
+            <LiquidationMap symbol={cur} />
+          </div>
+        </div>
       )}
 
       {/* 거래 내역 */}
