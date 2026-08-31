@@ -9,6 +9,7 @@ import { recordProfit } from "@/lib/tracking";
 import { supabase, supabaseEnabled } from "@/lib/supabase";
 import TradingViewChart from "@/components/trade/TradingViewChart";
 import LiquidationMap from "@/components/trade/LiquidationMap";
+import NativeChart from "@/components/trade/NativeChart";
 
 const ADMIN_ID = process.env.NEXT_PUBLIC_ADMIN_ID || "admin";
 
@@ -229,7 +230,9 @@ function Trade({ sessionUid }) {
     const opts = { tp: tp || undefined, sl: sl || undefined };
     // 필요 증거금: 신규 진입/추가분만 (반대매매 청산분은 증거금 불필요)
     const openNotional = isOpening ? amt : Math.max(0, (q - (posCur?.qty || 0)) * refPx);
-    if (openNotional / leverage > freeBase + 1e-6) return toastMsg("증거금 부족 (레버리지 대비)");
+    // 필요 예수금 = 증거금(명목/레버리지) + 진입 수수료. 수수료까지 예수금 안에서 감당돼야 함(잔고 음수 방지)
+    const feeCost = openNotional * (brand.feeRate || 0);
+    if (openNotional / leverage + feeCost > freeBase + 1e-6) return toastMsg("증거금 부족 (수수료 포함)");
     const label = isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산");
     if (type === "market") {
       setAcct((a) => applyFill(a, cur, side, q, p.px, leverage, "market", opts));
@@ -278,8 +281,9 @@ function Trade({ sessionUid }) {
   }
   function setPct(pct) {
     const px = parseFloat(price) || p.px; if (!px) return;
-    // 진입: 명목 = 주문여력 × 레버리지 × %  /  청산: 포지션 명목 × %
-    const notional = isOpening ? freeBase * leverage * pct : (posCur?.qty || 0) * px * pct;
+    // 진입: 명목 = 여력 × % (수수료 반영: 증거금+수수료 = 여력)  /  청산: 포지션 명목 × %
+    const maxNotional = freeBase / (1 / leverage + (brand.feeRate || 0));
+    const notional = isOpening ? maxNotional * pct : (posCur?.qty || 0) * px * pct;
     setAmount(notional.toFixed(2));
   }
 
@@ -378,7 +382,7 @@ function Trade({ sessionUid }) {
           </div>
           <div className="flex-1 min-h-0">
             {chartSrc === "native"
-              ? <LiquidationMap symbol={cur} compact heatmap={false} />
+              ? <NativeChart symbol={cur} decimals={coin.dec} />
               : <TradingViewChart symbol={coin.tv} interval={tf} />}
           </div>
         </div>
@@ -506,7 +510,7 @@ function Trade({ sessionUid }) {
             )}
             <div className="flex justify-between text-[11px] text-muted mb-2">
               <span>{isOpening ? `주문여력 (${leverage}x·${marginMode === "cross" ? "크로스" : "격리"})` : `청산가능 (${orderDir === "long" ? "숏" : "롱"})`}</span>
-              <span className="tabnum">{isOpening ? "$" + (freeBase * leverage).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
+              <span className="tabnum">{isOpening ? "$" + (freeBase / (1 / leverage + (brand.feeRate || 0))).toLocaleString("en-US", { maximumFractionDigits: 2 }) : (posCur?.qty || 0).toFixed(coin.qdec) + " " + cur}</span>
             </div>
             <button onClick={submit} className={`w-full py-3 rounded-[10px] font-bold text-sm ${side === "buy" ? "bg-up text-black" : "bg-down text-white"}`}>
               {cur} {isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산")}
