@@ -10,7 +10,7 @@ import { createChart } from "lightweight-charts";
  */
 const IV = [["1m", "1분"], ["5m", "5분"], ["15m", "15분"], ["1h", "1시간"], ["4h", "4시간"], ["1d", "1일"]];
 const IVMS = { "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
-const LINES = [["sr", "지지/저항"], ["tr", "추세선"], ["ch", "회귀채널"], ["ema", "EMA"], ["poc", "매물대"], ["fib", "피보"], ["ob", "OB"]];
+const LINES = [["ribbon", "리본"], ["struct", "구조"], ["signal", "신호"], ["sr", "지지/저항"], ["tr", "추세선"], ["ch", "회귀채널"], ["ema", "EMA"], ["poc", "매물대"], ["fib", "피보"], ["ob", "OB"]];
 
 function toBars(raw) { return raw.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })); }
 function ema(v, p) { var k = 2 / (p + 1), e = v[0], o = [e], i; for (i = 1; i < v.length; i++) { e = v[i] * k + e * (1 - k); o.push(e); } return o; }
@@ -22,7 +22,7 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
   const wrapRef = useRef(null);
   const legendRef = useRef(null);
   const [tf, setTf] = useState("15m");
-  const [lineOn, setLineOn] = useState({ sr: true, tr: true, ch: true, ema: true, poc: true, fib: false, ob: true });
+  const [lineOn, setLineOn] = useState({ ribbon: true, struct: true, signal: true, sr: true, tr: false, ch: false, ema: false, poc: true, fib: false, ob: true });
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -85,6 +85,40 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
       if (lineOn.ch) { const n = data.length; let sx = 0, sy = 0, sxy = 0, sxx = 0; data.forEach((d, i) => { sx += i; sy += d.close; sxy += i * d.close; sxx += i * i; }); const den = n * sxx - sx * sx, sl = den ? (n * sxy - sx * sy) / den : 0, itc = (sy - sl * sx) / n; let above = -Infinity, below = Infinity; data.forEach((d, i) => { const r = itc + sl * i; if (d.high - r > above) above = d.high - r; if (d.low - r < below) below = d.low - r; });[above, below].forEach((off) => { const ls = chart.addLineSeries({ color: "#4a9eff", lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }); ls.setData(data.map((d, i) => ({ time: d.time, value: itc + sl * i + off }))); }); }
       // 골드 스윙 추세선
       if (lineOn.tr) { const up = data[data.length - 1].close >= data[0].close; let pv = pivots(data, 4, up ? "low" : "high"); if (pv.length < 2) pv = pivots(data, 3, up ? "low" : "high"); if (pv.length >= 2) { let anchor = pv[0]; for (let k = 0; k < pv.length; k++) { if (up) { if (data[pv[k]].low < data[anchor].low) anchor = pv[k]; } else { if (data[pv[k]].high > data[anchor].high) anchor = pv[k]; } } let later = null; for (let m = pv.length - 1; m >= 0; m--) { if (pv[m] > anchor) { later = pv[m]; break; } } if (later == null) { const idx = pv.indexOf(anchor); if (idx > 0) { later = anchor; anchor = pv[idx - 1]; } } if (later != null && later > anchor) { const pa = up ? data[anchor].low : data[anchor].high, pb = up ? data[later].low : data[later].high, slope = (pb - pa) / (later - anchor); const ts = chart.addLineSeries({ color: "#e0a83e", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }); const pts = []; for (let ii = anchor; ii < data.length; ii++) pts.push({ time: data[ii].time, value: pa + slope * (ii - anchor) }); ts.setData(pts); } } }
+
+      // ── 트렌드 리본(상승 파랑 / 하락 빨강) ──
+      const markers = [];
+      const clz2 = data.map((d) => d.close);
+      const rib = ema(clz2, 21);
+      if (lineOn.ribbon) {
+        const upS = chart.addLineSeries({ color: "#3b82f6", lineWidth: 3, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        const dnS = chart.addLineSeries({ color: "#f6465d", lineWidth: 3, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        const upPts = [], dnPts = [];
+        for (let i = 0; i < data.length; i++) {
+          const rising = i > 0 ? rib[i] >= rib[i - 1] : true; const t = data[i].time;
+          if (rising) { upPts.push({ time: t, value: rib[i] }); dnPts.push({ time: t }); }
+          else { dnPts.push({ time: t, value: rib[i] }); upPts.push({ time: t }); }
+        }
+        // 색 전환 지점은 양쪽에 값 부여해 선이 끊기지 않게 연결
+        for (let i = 1; i < data.length; i++) { const rC = rib[i] >= rib[i - 1], rP = i > 1 ? rib[i - 1] >= rib[i - 2] : rC; if (rC !== rP) { upPts[i] = { time: data[i].time, value: rib[i] }; dnPts[i] = { time: data[i].time, value: rib[i] }; } }
+        upS.setData(upPts); dnS.setData(dnPts);
+      }
+      // ── 시장 구조: 스윙 고/저 (HH/LH · HL/LL) + 강한/약한 고점·저점 ──
+      if (lineOn.struct) {
+        const sh = pivots(data, 5, "high"), sl = pivots(data, 5, "low");
+        let prevH = null; sh.forEach((i) => { const lbl = prevH != null ? (data[i].high > data[prevH].high ? "HH" : "LH") : "H"; markers.push({ time: data[i].time, position: "aboveBar", color: "#f6465d", shape: "arrowDown", text: lbl }); prevH = i; });
+        let prevL = null; sl.forEach((i) => { const lbl = prevL != null ? (data[i].low < data[prevL].low ? "LL" : "HL") : "L"; markers.push({ time: data[i].time, position: "belowBar", color: "#2ebd85", shape: "arrowUp", text: lbl }); prevL = i; });
+        if (sh.length) { const i = sh[sh.length - 1]; const strong = sh.length >= 2 && data[i].high > data[sh[sh.length - 2]].high; cs.createPriceLine({ price: data[i].high, color: "#f6465d", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: (strong ? "강한" : "약한") + " 고점" }); }
+        if (sl.length) { const i = sl[sl.length - 1]; const strong = sl.length >= 2 && data[i].low > data[sl[sl.length - 2]].low; cs.createPriceLine({ price: data[i].low, color: "#4a9eff", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: (strong ? "강한" : "약한") + " 저점" }); }
+      }
+      // ── 매수/매도 신호: 리본 상향/하향 돌파 ──
+      if (lineOn.signal) {
+        for (let i = 1; i < data.length; i++) {
+          if (clz2[i] > rib[i] && clz2[i - 1] <= rib[i - 1]) markers.push({ time: data[i].time, position: "belowBar", color: "#26de81", shape: "circle" });
+          else if (clz2[i] < rib[i] && clz2[i - 1] >= rib[i - 1]) markers.push({ time: data[i].time, position: "aboveBar", color: "#f6465d", shape: "circle" });
+        }
+      }
+      if (markers.length) { markers.sort((a, b) => a.time - b.time); cs.setMarkers(markers); }
 
       // 실시간 갱신: 마지막 바 + 폴링
       let last = Object.assign({}, data[data.length - 1]);
