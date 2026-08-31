@@ -43,6 +43,7 @@ function Trade({ sessionUid }) {
   const [cur, setCur] = useState(sp.get("sym") || "BTC");
   const [side, setSide] = useState("buy");
   const [tf, setTf] = useState("1");
+  const [chartSrc, setChartSrc] = useState("native"); // native(분석차트) | tv(TradingView) — 롤백 시 "tv"로
   const [type, setType] = useState("market");   // 기본 시장가
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");   // 주문 금액(USDT, 명목가치)
@@ -357,13 +358,29 @@ function Trade({ sessionUid }) {
 
         {/* chart */}
         <div className="card !rounded-xl overflow-hidden flex flex-col h-[300px] lg:h-auto shrink-0 min-h-0">
-          <div className="flex gap-1.5 px-3 py-2 border-b border-line overflow-x-auto">
-            {TF.map(([v, l]) => (
-              <button key={v} onClick={() => setTf(v)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border ${tf === v ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
-            ))}
+          <div className="flex items-center gap-1.5 px-3 py-2 border-b border-line overflow-x-auto">
+            {/* 차트 소스 토글: 분석차트(네이티브) / TradingView */}
+            <div className="flex gap-1 mr-1 shrink-0">
+              {[["native", "🔥 분석차트"], ["tv", "TradingView"]].map(([v, l]) => (
+                <button key={v} onClick={() => setChartSrc(v)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold border whitespace-nowrap ${chartSrc === v ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
+              ))}
+            </div>
+            {chartSrc === "tv" && (
+              <>
+                <span className="w-px h-4 bg-line shrink-0" />
+                {TF.map(([v, l]) => (
+                  <button key={v} onClick={() => setTf(v)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border ${tf === v ? "bg-brand text-white border-brand" : "bg-panel2 text-muted border-line"}`}>{l}</button>
+                ))}
+              </>
+            )}
           </div>
-          <div className="flex-1 min-h-0"><TradingViewChart symbol={coin.tv} interval={tf} /></div>
+          <div className="flex-1 min-h-0">
+            {chartSrc === "native"
+              ? <LiquidationMap symbol={cur} compact heatmap={false} />
+              : <TradingViewChart symbol={coin.tv} interval={tf} />}
+          </div>
         </div>
 
         {/* orderbook + form */}

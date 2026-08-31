@@ -8,27 +8,50 @@ import { useEffect, useRef } from "react";
  *  - 캔들·매물대(POC)·오더블럭·레버리지 청산대·청산벽 근접 알림 canvas 렌더
  * 엔진은 자체 완결형 vanilla JS. 컴포넌트는 스캐폴드 주입 후 start()/stop()만 제어.
  */
-export default function LiquidationMap({ symbol = "BTC" }) {
+export default function LiquidationMap({ symbol = "BTC", compact = false, heatmap = true }) {
   const rootRef = useRef(null);
+  const engineRef = useRef(null);
 
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    root.innerHTML = liqHTML();
+    root.innerHTML = liqHTML(compact);
     const initSym = String(symbol || "BTC").toUpperCase().replace(/USDT$/, "");
-    const engine = makeLiqEngine(root, initSym);
+    const engine = makeLiqEngine(root, initSym, { compact, heatmap });
+    engineRef.current = engine;
     engine.start();
     return () => {
       try { engine.stop(); } catch (_) {}
+      engineRef.current = null;
       if (root) root.innerHTML = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [compact]);
 
-  return <div ref={rootRef} className="lqHost" />;
+  // 메인 차트로 쓸 때: 선택 종목(cur)이 바뀌면 심볼 전환
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (eng && eng.switchSym) eng.switchSym(String(symbol || "BTC").toUpperCase().replace(/USDT$/, ""));
+  }, [symbol]);
+
+  return <div ref={rootRef} className={compact ? "lqHost h-full" : "lqHost"} style={compact ? { height: "100%" } : undefined} />;
 }
 
-function liqHTML() {
+function liqHTML(compact) {
+  if (compact) {
+    return '<style>'
+      + '#lqRoot{--lqline:#222d3d;--lqsub:#8b96a7;color:#e8ecf3;height:100%;display:flex;flex-direction:column}'
+      + '#lqRoot .lqpill{padding:4px 9px;border-radius:8px;border:1px solid var(--lqline);background:#0f151f;color:#c9d3e0;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}'
+      + '#lqRoot .lqpill.on{border-color:#e0b552;background:rgba(224,181,82,.14);color:#e0b552}'
+      + '</style>'
+      + '<div id="lqRoot">'
+      + '<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:6px 4px 8px">'
+      + '<div id="lqTfs" style="display:flex;gap:5px;flex-wrap:wrap"></div>'
+      + '<span style="width:1px;height:16px;background:#222d3d;margin:0 3px"></span>'
+      + '<div id="lqLines" style="display:flex;gap:5px;flex-wrap:wrap;align-items:center"></div>'
+      + '<span style="margin-left:auto;font-size:10px;color:#5a6576"><b id="lqLgSym">BTC</b> · <span id="lqLiveTxt">연결 중…</span></span></div>'
+      + '<div style="position:relative;flex:1;min-height:0"><canvas id="lqChart" style="width:100%;height:100%;display:block"></canvas></div></div>';
+  }
   return '<style>'
     + '#lqRoot{--lqline:#222d3d;--lqsub:#8b96a7;color:#e8ecf3}'
     + '#lqRoot .lqpill{padding:6px 12px;border-radius:9px;border:1px solid var(--lqline);background:#0f151f;color:#c9d3e0;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}'
@@ -63,12 +86,14 @@ function liqHTML() {
 }
 
 // ===== 청산맵 엔진(네이티브 이식: 구 VANTOR 터미널 liqmap) — root 스코프 =====
-function makeLiqEngine(root, initSym) {
+function makeLiqEngine(root, initSym, opts) {
+  opts = opts || {};
+  var compact = !!opts.compact;
   var $ = function (s) { return root.querySelector(s); };
   var SYMS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'ADA', 'DOGE']; if (SYMS.indexOf(initSym) < 0) SYMS.unshift(initSym);
   var TFS = [['1m', '1분'], ['5m', '5분'], ['15m', '15분'], ['1h', '1시간'], ['4h', '4시간'], ['12h', '12시간'], ['1d', '24시간'], ['3d', '3일']];
   var LINES = [['sr', '지지/저항', '#2ebd85'], ['tr', '추세선', '#e0a83e'], ['ch', '회귀채널', '#4a9eff']];
-  var st = { sym: initSym || 'BTC', tf: '15m', candles: [], price: 0, chg: 0, bins: new Map(), model: new Map(), binUsd: 50, binFixed: false, oiUsd: 0, tot: 0, cnt: 0, ws: null, feed: [], hover: null, deriv: null, lineOn: { sr: true, tr: true, ch: true } };
+  var st = { sym: initSym || 'BTC', tf: '15m', candles: [], price: 0, chg: 0, bins: new Map(), model: new Map(), binUsd: 50, binFixed: false, oiUsd: 0, tot: 0, cnt: 0, ws: null, feed: [], hover: null, deriv: null, lineOn: { sr: true, tr: true, ch: true }, showHeat: opts.heatmap !== false };
   var stopped = false, timers = [], dirty = true;
   function fmtPx(v) { if (!v && v !== 0) return '—'; if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 1 }); if (v >= 1) return v.toFixed(3); return v.toFixed(5); }
   function fmtUsd(v) { if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B'; if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M'; if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K'; return '$' + Math.round(v); }
@@ -142,10 +167,10 @@ function makeLiqEngine(root, initSym) {
     var lo = Infinity, hi = -Infinity; for (var i = 0; i < cs.length; i++) { if (cs[i].l < lo) lo = cs[i].l; if (cs[i].h > hi) hi = cs[i].h; } var pad = (hi - lo) * 0.08; lo -= pad; hi += pad; if (st.price) { lo = Math.min(lo, st.price * 0.985); hi = Math.max(hi, st.price * 1.015); }
     var cl = PADL, cr = W - PADR, cw = cr - cl, ct = PADT, cb = H - PADB, ch = cb - ct; function y(p) { return ct + (hi - p) / (hi - lo) * ch; } var n = cs.length, bw = cw / n;
     var HB = allBins(), maxV = 0; HB.forEach(function (v) { var s = v.long + v.short; if (s > maxV) maxV = s; });
-    if (maxV > 0) { var hpx = Math.max(1.2, ch / ((hi - lo) / st.binUsd)); HB.forEach(function (v, b) { var p = binPx(b); if (p < lo || p > hi) return; var sum = v.long + v.short; if (sum <= 0) return; var ratio = sum / maxV; if (ratio < 0.02) return; var yy = y(p), inten = Math.pow(ratio, 0.95), a = Math.min(0.95, 0.015 + inten * 1.05); var R = Math.round(24 + 74 * inten), G = Math.round(40 + 86 * inten), B = Math.round(150 + 95 * inten); var col = (v.col != null) ? v.col : (n - 1), xStart = cl + (col / ((n - 1) || 1)) * cw; if (xStart < cl) xStart = cl; if (xStart > cr - 3) xStart = cr - 3; ctx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + a.toFixed(3) + ')'; ctx.fillRect(xStart, yy - hpx / 2, cr - xStart, hpx * 0.9); if (inten > 0.16) { var edge = v.long >= v.short ? '246,70,93' : '46,189,133', ew = Math.min(cw * 0.42, cw * inten * 0.5); ctx.fillStyle = 'rgba(' + edge + ',' + (0.3 + inten * 0.55).toFixed(3) + ')'; ctx.fillRect(cr - ew, yy - hpx / 2, ew, Math.max(1, hpx * 0.6)); } }); }
+    if (st.showHeat && maxV > 0) { var hpx = Math.max(1.2, ch / ((hi - lo) / st.binUsd)); HB.forEach(function (v, b) { var p = binPx(b); if (p < lo || p > hi) return; var sum = v.long + v.short; if (sum <= 0) return; var ratio = sum / maxV; if (ratio < 0.02) return; var yy = y(p), inten = Math.pow(ratio, 0.95), a = Math.min(0.95, 0.015 + inten * 1.05); var R = Math.round(24 + 74 * inten), G = Math.round(40 + 86 * inten), B = Math.round(150 + 95 * inten); var col = (v.col != null) ? v.col : (n - 1), xStart = cl + (col / ((n - 1) || 1)) * cw; if (xStart < cl) xStart = cl; if (xStart > cr - 3) xStart = cr - 3; ctx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + a.toFixed(3) + ')'; ctx.fillRect(xStart, yy - hpx / 2, cr - xStart, hpx * 0.9); if (inten > 0.16) { var edge = v.long >= v.short ? '246,70,93' : '46,189,133', ew = Math.min(cw * 0.42, cw * inten * 0.5); ctx.fillStyle = 'rgba(' + edge + ',' + (0.3 + inten * 0.55).toFixed(3) + ')'; ctx.fillRect(cr - ew, yy - hpx / 2, ew, Math.max(1, hpx * 0.6)); } }); }
     var vp = {}, vpMax = 0, pocBin = null; for (var i3 = 0; i3 < n; i3++) { var c3 = cs[i3], q3 = c3.v * c3.c; if (q3 <= 0) continue; var b0 = binOf(c3.l), b1 = binOf(c3.h), span = Math.max(1, b1 - b0 + 1), per = q3 / span; for (var pb = b0; pb <= b1; pb++) { vp[pb] = (vp[pb] || 0) + per; if (vp[pb] > vpMax) { vpMax = vp[pb]; pocBin = pb; } } }
     if (vpMax > 0) { var hpx2 = Math.max(1.2, ch / ((hi - lo) / st.binUsd)), vpW = cw * 0.14; for (var pk in vp) { var pp = binPx(+pk); if (pp < lo || pp > hi) continue; var yy2 = y(pp), w2 = vp[pk] / vpMax * vpW; ctx.fillStyle = 'rgba(190,205,225,0.09)'; ctx.fillRect(cl, yy2 - hpx2 / 2, w2, hpx2 * 0.9); } if (pocBin != null) { var pocP = binPx(pocBin); if (pocP >= lo && pocP <= hi) { var yy3 = y(pocP); ctx.strokeStyle = 'rgba(190,205,225,0.35)'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cl, yy3); ctx.lineTo(cl + vpW, yy3); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = 'rgba(190,205,225,0.6)'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.fillText('POC 매물대', cl + vpW + 3, yy3 + 3); ctx.textAlign = 'start'; } } }
-    if (st.price) { var levs = [[100, '100x'], [50, '50x'], [25, '25x'], [10, '10x']]; ctx.save(); ctx.setLineDash([4, 4]); ctx.font = '10px sans-serif'; levs.forEach(function (L) { var frac = 1 / L[0];[['short', st.price * (1 + frac), '46,189,133'], ['long', st.price * (1 - frac), '246,70,93']].forEach(function (d) { var pp = d[1]; if (pp < lo || pp > hi) return; var yy = y(pp); ctx.strokeStyle = 'rgba(' + d[2] + ',0.22)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cl, yy); ctx.lineTo(cr, yy); ctx.stroke(); ctx.fillStyle = 'rgba(' + d[2] + ',0.7)'; ctx.fillText(L[1], cl + 4, yy - 2); }); }); ctx.restore(); }
+    if (st.showHeat && st.price) { var levs = [[100, '100x'], [50, '50x'], [25, '25x'], [10, '10x']]; ctx.save(); ctx.setLineDash([4, 4]); ctx.font = '10px sans-serif'; levs.forEach(function (L) { var frac = 1 / L[0];[['short', st.price * (1 + frac), '46,189,133'], ['long', st.price * (1 - frac), '246,70,93']].forEach(function (d) { var pp = d[1]; if (pp < lo || pp > hi) return; var yy = y(pp); ctx.strokeStyle = 'rgba(' + d[2] + ',0.22)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cl, yy); ctx.lineTo(cr, yy); ctx.stroke(); ctx.fillStyle = 'rgba(' + d[2] + ',0.7)'; ctx.fillText(L[1], cl + 4, yy - 2); }); }); ctx.restore(); }
     var volH = ch * 0.22, maxVol = 0; for (var iv = 0; iv < n; iv++) { var q = cs[iv].v * cs[iv].c; if (q > maxVol) maxVol = q; } if (maxVol > 0) { var vw = Math.max(1.5, bw * 0.9); for (var iv2 = 0; iv2 < n; iv2++) { var c2 = cs[iv2], q2 = c2.v * c2.c, bh = Math.max(0.6, q2 / maxVol * volH), x2 = cl + iv2 * bw + bw / 2; ctx.fillStyle = (c2.c >= c2.o) ? 'rgba(46,189,133,0.42)' : 'rgba(246,70,93,0.42)'; ctx.fillRect(x2 - vw / 2, cb - bh, vw, bh); } }
     var obs = findOB(cs, st.price); obs.forEach(function (ob) { var yt = y(ob.top), ybt = y(ob.bottom); if (ob.top < lo || ob.bottom > hi) return; var ox = cl + ob.idx * bw, rgb = ob.type === 'bull' ? '46,189,133' : '246,70,93'; ctx.fillStyle = 'rgba(' + rgb + ',0.20)'; ctx.fillRect(ox, yt, cr - ox, ybt - yt); ctx.strokeStyle = 'rgba(' + rgb + ',0.95)'; ctx.lineWidth = 1.8; ctx.setLineDash([5, 3]); ctx.strokeRect(ox, yt, cr - ox, ybt - yt); ctx.setLineDash([]); var lb = (ob.type === 'bull' ? '🟩 OB 지지' : '🟥 OB 저항'); ctx.font = '800 11px sans-serif'; var lw = ctx.measureText(lb).width + 8; ctx.fillStyle = 'rgba(' + rgb + ',0.92)'; ctx.fillRect(ox, yt, lw, 15); ctx.fillStyle = '#0b0f16'; ctx.textAlign = 'left'; ctx.fillText(lb, ox + 4, yt + 11); ctx.textAlign = 'start'; });
     for (var i4 = 0; i4 < n; i4++) { var c = cs[i4], x = cl + i4 * bw + bw / 2, up = c.c >= c.o, col2 = up ? '#2ebd85' : '#f6465d'; ctx.strokeStyle = col2; ctx.fillStyle = col2; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, y(c.h)); ctx.lineTo(x, y(c.l)); ctx.stroke(); var bodyW = Math.max(1, bw * 0.62), yo = y(c.o), yc = y(c.c); ctx.fillRect(x - bodyW / 2, Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yc - yo))); }
@@ -154,14 +179,18 @@ function makeLiqEngine(root, initSym) {
     if (st.lineOn.ch && n >= 5) { var sx = 0, sy = 0, sxy = 0, sxx = 0; for (var ci = 0; ci < n; ci++) { sx += ci; sy += cs[ci].c; sxy += ci * cs[ci].c; sxx += ci * ci; } var den = (n * sxx - sx * sx), sl = den ? (n * sxy - sx * sy) / den : 0, itc = (sy - sl * sx) / n; var above = -Infinity, below = Infinity; for (var ci2 = 0; ci2 < n; ci2++) { var rr = itc + sl * ci2; if (cs[ci2].h - rr > above) above = cs[ci2].h - rr; if (cs[ci2].l - rr < below) below = cs[ci2].l - rr; } ctx.strokeStyle = 'rgba(74,158,255,0.85)'; ctx.lineWidth = 1.2; ctx.setLineDash([]);[above, below].forEach(function (off) { ctx.beginPath(); for (var c4 = 0; c4 < n; c4++) { var xx = cl + c4 * bw + bw / 2, yy = y(itc + sl * c4 + off); if (c4 === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); } ctx.stroke(); }); }
     if (st.lineOn.tr && n >= 8) { var up = cs[n - 1].c >= cs[0].c; var pv = pivotsC(cs, 4, up ? 'low' : 'high'); if (pv.length < 2) pv = pivotsC(cs, 3, up ? 'low' : 'high'); if (pv.length >= 2) { var anchor = pv[0]; for (var pk2 = 0; pk2 < pv.length; pk2++) { if (up) { if (cs[pv[pk2]].l < cs[anchor].l) anchor = pv[pk2]; } else { if (cs[pv[pk2]].h > cs[anchor].h) anchor = pv[pk2]; } } var later = null; for (var mm = pv.length - 1; mm >= 0; mm--) { if (pv[mm] > anchor) { later = pv[mm]; break; } } if (later == null) { var idx = pv.indexOf(anchor); if (idx > 0) { later = anchor; anchor = pv[idx - 1]; } } if (later != null && later > anchor) { var pa = up ? cs[anchor].l : cs[anchor].h, pb = up ? cs[later].l : cs[later].h, slope = (pb - pa) / (later - anchor); ctx.strokeStyle = '#e0a83e'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.beginPath(); for (var ii = anchor; ii < n; ii++) { var xx2 = cl + ii * bw + bw / 2, yy2 = y(pa + slope * (ii - anchor)); if (ii === anchor) ctx.moveTo(xx2, yy2); else ctx.lineTo(xx2, yy2); } ctx.stroke(); } } }
     if (st.price) { var yp = y(st.price); ctx.strokeStyle = 'rgba(46,189,133,0.95)'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cl, yp); ctx.lineTo(cr, yp); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#2ebd85'; ctx.fillRect(cr, yp - 9, PADR, 18); ctx.fillStyle = '#04120c'; ctx.font = '700 11px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(fmtPx(st.price), cr + 5, yp + 4); ctx.textAlign = 'start'; }
-    var tL = topLevels(), NEAR = 0.015, nearHit = false, pulse = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 350));[[tL.shorts[0], '46,189,133', '숏'], [tL.longs[0], '246,70,93', '롱']].forEach(function (d) { if (!d[0]) return; var p = binPx(d[0][0]); if (p < lo || p > hi) return; var yy = y(p); var dist = st.price ? Math.abs(p - st.price) / st.price : 9, near = dist <= NEAR; if (near) { nearHit = true; ctx.strokeStyle = 'rgba(' + d[1] + ',' + (0.35 + pulse * 0.6).toFixed(2) + ')'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(cl, yy); ctx.lineTo(cr, yy); ctx.stroke(); } ctx.fillStyle = 'rgba(' + d[1] + ',0.98)'; ctx.font = '700 10.5px sans-serif'; var sc = usdScale(), label = (near ? '⚠ ' : '◀ ') + d[2] + ' 청산벽' + (sc > 0 ? (' 추정 ' + fmtUsd(d[0][1] * sc)) : '') + (near ? ' 근접 ' + (dist * 100).toFixed(2) + '%' : ''); ctx.textAlign = 'right'; ctx.fillText(label, cr - 6, yy - 3); ctx.textAlign = 'start'; }); if (nearHit) dirty = true;
+    var tL = topLevels(), NEAR = 0.015, nearHit = false, pulse = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 350)); if (st.showHeat) [[tL.shorts[0], '46,189,133', '숏'], [tL.longs[0], '246,70,93', '롱']].forEach(function (d) { if (!d[0]) return; var p = binPx(d[0][0]); if (p < lo || p > hi) return; var yy = y(p); var dist = st.price ? Math.abs(p - st.price) / st.price : 9, near = dist <= NEAR; if (near) { nearHit = true; ctx.strokeStyle = 'rgba(' + d[1] + ',' + (0.35 + pulse * 0.6).toFixed(2) + ')'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(cl, yy); ctx.lineTo(cr, yy); ctx.stroke(); } ctx.fillStyle = 'rgba(' + d[1] + ',0.98)'; ctx.font = '700 10.5px sans-serif'; var sc = usdScale(), label = (near ? '⚠ ' : '◀ ') + d[2] + ' 청산벽' + (sc > 0 ? (' 추정 ' + fmtUsd(d[0][1] * sc)) : '') + (near ? ' 근접 ' + (dist * 100).toFixed(2) + '%' : ''); ctx.textAlign = 'right'; ctx.fillText(label, cr - 6, yy - 3); ctx.textAlign = 'start'; }); if (nearHit) dirty = true;
     ctx.fillStyle = '#5a6576'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; for (var g = 0; g <= 5; g++) { var pp2 = hi - (hi - lo) * g / 5, yy4 = ct + ch * g / 5; ctx.strokeStyle = 'rgba(33,42,56,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cl, yy4); ctx.lineTo(cr, yy4); ctx.stroke(); ctx.fillStyle = '#5a6576'; ctx.fillText(fmtPx(pp2), cr + 5, yy4 + 3); }
     ctx.textAlign = 'center'; for (var kk = 0; kk < n; kk += Math.ceil(n / 7)) { var dd = new Date(cs[kk].t), xk = cl + kk * bw + bw / 2, big = tfMin() >= 1440; var lab = (dd.getMonth() + 1) + '/' + dd.getDate() + (big ? '' : (' ' + ('0' + dd.getHours()).slice(-2) + ':' + ('0' + dd.getMinutes()).slice(-2))); ctx.fillStyle = '#5a6576'; ctx.fillText(lab, xk, H - 9); } ctx.textAlign = 'start';
     if (st.hover != null && st.hover >= 0 && st.hover < n) { var hc = cs[st.hover], hx = cl + st.hover * bw + bw / 2, hup = hc.c >= hc.o, dcol = hup ? '#2ebd85' : '#f6465d'; ctx.strokeStyle = 'rgba(90,120,240,0.6)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(hx, ct); ctx.lineTo(hx, cb); ctx.stroke(); ctx.setLineDash([]); var hd = new Date(hc.t), ds = (hd.getMonth() + 1) + '/' + hd.getDate() + ' ' + ('0' + hd.getHours()).slice(-2) + ':' + ('0' + hd.getMinutes()).slice(-2); var q4 = hc.v * hc.c, chg2 = ((hc.c - hc.o) / hc.o * 100), vol = hc.v; var rows = [['시간', ds, '#c9d3e0'], ['시가', fmtPx(hc.o), '#8b96a7'], ['고가', fmtPx(hc.h), '#2ebd85'], ['저가', fmtPx(hc.l), '#f6465d'], ['종가', fmtPx(hc.c) + ' (' + (chg2 >= 0 ? '+' : '') + chg2.toFixed(2) + '%)', dcol], ['거래량', vol.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' ' + st.sym, '#c9d3e0'], ['거래대금', fmtUsd(q4) + ' · ' + fmtKrw(q4) + '원', '#6f8bff']]; ctx.font = '11px sans-serif'; var bw2 = 196, bh2 = rows.length * 16 + 10, bx = hx + 12; if (bx + bw2 > cr) bx = hx - 12 - bw2; if (bx < cl) bx = cl + 4; var by = ct + 6; ctx.fillStyle = 'rgba(9,13,20,0.95)'; ctx.fillRect(bx, by, bw2, bh2); ctx.strokeStyle = 'rgba(90,120,240,0.5)'; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw2, bh2); rows.forEach(function (l, li) { var ly = by + 17 + li * 16; ctx.textAlign = 'left'; ctx.fillStyle = '#5a6576'; ctx.fillText(l[0], bx + 9, ly); ctx.textAlign = 'right'; ctx.fillStyle = l[2]; ctx.fillText(l[1], bx + bw2 - 9, ly); }); ctx.textAlign = 'start'; }
     requestAnimationFrame(draw);
   }
   function buildPills() { var sp = $('#lqSyms'), tp = $('#lqTfs'); if (sp) { sp.innerHTML = SYMS.map(function (s) { return '<button class="lqpill' + (s === st.sym ? ' on' : '') + '" data-s="' + s + '">' + s + '</button>'; }).join(''); sp.querySelectorAll('.lqpill').forEach(function (b) { b.onclick = function () { switchSym(b.dataset.s); }; }); } if (tp) { tp.innerHTML = TFS.map(function (t) { return '<button class="lqpill' + (t[0] === st.tf ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join(''); tp.querySelectorAll('.lqpill').forEach(function (b) { b.onclick = function () { switchTf(b.dataset.t); }; }); } }
-  function buildLineToggles() { var lp = $('#lqLines'); if (!lp) return; lp.querySelectorAll('.lqpill').forEach(function (b) { b.remove(); }); LINES.forEach(function (L) { var b = document.createElement('button'); b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); b.textContent = L[1]; b.style.borderLeft = '3px solid ' + L[2]; b.onclick = function () { st.lineOn[L[0]] = !st.lineOn[L[0]]; b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); dirty = true; }; lp.appendChild(b); }); }
+  function buildLineToggles() {
+    var lp = $('#lqLines'); if (!lp) return; lp.querySelectorAll('.lqpill').forEach(function (b) { b.remove(); });
+    LINES.forEach(function (L) { var b = document.createElement('button'); b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); b.textContent = L[1]; b.style.borderLeft = '3px solid ' + L[2]; b.onclick = function () { st.lineOn[L[0]] = !st.lineOn[L[0]]; b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); dirty = true; }; lp.appendChild(b); });
+    if (compact) { var hb = document.createElement('button'); hb.className = 'lqpill' + (st.showHeat ? ' on' : ''); hb.textContent = '🔥 히트맵'; hb.onclick = function () { st.showHeat = !st.showHeat; hb.className = 'lqpill' + (st.showHeat ? ' on' : ''); dirty = true; }; lp.appendChild(hb); }
+  }
   function switchSym(s) { if (s === st.sym) return; st.sym = s; st.binFixed = false; st.bins = new Map(); st.model = new Map(); st.oiUsd = 0; st.tot = 0; st.cnt = 0; st.feed = []; st.candles = []; st.deriv = null; buildPills(); var lg = $('#lqLgSym'); if (lg) lg.textContent = s; renderFeed(); renderDeriv(); loadKlines().then(function () { return loadOI(); }).then(renderStats).catch(function () { }); connectWS(); loadDeriv(); dirty = true; }
   function switchTf(t) { if (t === st.tf) return; st.tf = t; st.binFixed = false; st.bins = new Map(); buildPills(); var lg = $('#lqLgTf'); if (lg) lg.textContent = (TFS.filter(function (x) { return x[0] === t; })[0] || ['', '15분'])[1]; loadKlines().then(function () { dirty = true; }).catch(function () { }); }
   function searchCoin(raw) { var inp = $('#lqSearch'), s = (raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/USDT$/, ''); if (!s) return; if (inp) inp.placeholder = '🔍 ' + s + ' 확인 중…'; fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + s + 'USDT').then(function (r) { return r.json(); }).then(function (j) { if (j && j.price) { if (SYMS.indexOf(s) < 0) { SYMS.unshift(s); if (SYMS.length > 9) SYMS.pop(); } switchSym(s); if (inp) { inp.value = ''; inp.placeholder = '🔍 코인 검색 (예: ADA·1000PEPE·SUI)'; } } else { if (inp) inp.placeholder = '❌ 없는 심볼: ' + s; } }).catch(function () { if (inp) inp.placeholder = '❌ 검색 실패 · 다시'; }); }
@@ -179,5 +208,5 @@ function makeLiqEngine(root, initSym) {
   }
   function stop() { stopped = true; if (st.ws) { try { st.ws.onclose = null; st.ws.close(); } catch (e) { } st.ws = null; } timers.forEach(function (t) { clearTimeout(t); clearInterval(t); }); timers = []; window.removeEventListener('resize', resize); }
   window.addEventListener('resize', resize);
-  return { start: start, stop: stop };
+  return { start: start, stop: stop, switchSym: switchSym };
 }
