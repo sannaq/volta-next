@@ -68,7 +68,7 @@ function Gate({ onOk }) {
           <button disabled={busy} className="btn btn-primary w-full py-3 mt-5 text-white disabled:opacity-60">{busy ? "확인 중…" : "로그인"}</button>
         </form>
         {err && <div className="text-down text-xs text-center mt-3">{err}</div>}
-        <div className="text-muted2 text-[11px] text-center mt-4">관리자 전용 · 계정은 환경변수(NEXT_PUBLIC_ADMIN_ID/_PW)로 설정</div>
+        <div className="text-muted2 text-[11px] text-center mt-4">관리자 전용 · 비밀번호는 서버에서 검증됩니다(ADMIN_PW)</div>
       </div>
     </main>
   );

@@ -34,11 +34,13 @@ export async function POST(req) {
   if (!ADMIN_PW) return json({ ok: false, error: "server_not_configured", hint: "ADMIN_PW 환경변수를 설정하세요" }, 500);
   if (String(secret || "") !== String(ADMIN_PW)) return json({ ok: false, error: "unauthorized" }, 401);
 
+  // 로그인은 비밀번호만으로 통과(DB는 목록/작업 시 필요)
+  if (action === "login") return json({ ok: true, serviceRole: !!SERVICE, db: !!(URL && (SERVICE || ANON)) });
+
   const sb = db();
   if (!sb) return json({ ok: false, error: "db_not_configured" }, 500);
 
   try {
-    if (action === "login") return json({ ok: true, serviceRole: !!SERVICE });
 
     if (action === "list") {
       const [w, tk] = await Promise.all([
