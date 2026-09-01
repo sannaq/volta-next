@@ -81,7 +81,8 @@ function Trade({ sessionUid }) {
       const keep = [], fills = [];
       for (const o of a.openOrders) {
         const lp = prices[o.sym]?.px;
-        if (lp == null) { keep.push(o); continue; }
+        // 실시간 가격 도착 전(시드값)에는 체결 판정 금지 — 오체결 방지
+        if (lp == null || !prices[o.sym]?.live) { keep.push(o); continue; }
         let hit;
         if (o.otype === "stop") hit = o.above ? lp >= o.trigger : lp <= o.trigger;
         else hit = o.side === "buy" ? lp <= o.price : lp >= o.price;
@@ -89,10 +90,19 @@ function Trade({ sessionUid }) {
       }
       if (!fills.length) return a;
       let na = { ...a, openOrders: keep };
+      const feeRate = brand.feeRate || 0;
       for (const o of fills) {
         const px = o.otype === "stop" ? prices[o.sym].px : o.price;
+        // 진입(신규/추가) 체결은 체결 시점 예수금으로 매수여력 재검증 → 음수 방지. 부족하면 미체결 유지.
+        const cp = na.positions?.[o.sym]; const dir = o.side === "buy" ? "long" : "short";
+        const isOpen = !cp || cp.side === dir;
+        if (isOpen) {
+          const notional = o.qty * px, lev = Math.max(1, o.leverage || 1);
+          if (notional / lev + notional * feeRate > na.cashUSDT + 1e-6) { keep.push(o); continue; }
+        }
         na = applyFill(na, o.sym, o.side, o.qty, px, o.leverage || 1, o.otype === "stop" ? "stop" : "limit", { tp: o.tp, sl: o.sl });
       }
+      na = { ...na, openOrders: keep };
       return na;
     });
   }, [prices]); // eslint-disable-line
@@ -104,6 +114,7 @@ function Trade({ sessionUid }) {
       let na = a, changed = false; const notes = [];
       for (const sym of Object.keys(na.positions)) {
         const pos = na.positions[sym]; const px = prices[sym]?.px; if (px == null) continue;
+        if (!prices[sym]?.live) continue; // 실시간 가격에서만 TP/SL 발동 — 시드값 오발동 방지
         const tpHit = pos.tp != null && (pos.side === "long" ? px >= pos.tp : px <= pos.tp);
         const slHit = pos.sl != null && (pos.side === "long" ? px <= pos.sl : px >= pos.sl);
         if (tpHit || slHit) {
