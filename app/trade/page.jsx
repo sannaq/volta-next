@@ -279,20 +279,20 @@ function Trade({ sessionUid }) {
     const roe = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
     const effLev = pos.margin > 0 ? Math.round((pos.qty * pos.entry) / pos.margin) : 1;
     const c = brand.coins.find((x) => x.sym === sym) || {};
-    setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, dec: c.dec ?? 2, margin: pos.margin, maint: pos.qty * px * MM, pnl, mode: marginMode, closed: false });
+    setPnlCard({ sym, side: pos.side, entry: pos.entry, mark: px, roe, lev: effLev, dec: c.dec ?? 2, margin: pos.margin, maint: pos.margin * MM, pnl, mode: marginMode, closed: false });
   }
   function openHistoryCard(rec) {
     const c = brand.coins.find((x) => x.sym === rec.sym) || {};
     const dec = c.dec ?? 2;
     if (rec.reduce) {
       const margin = (rec.qty * (rec.entry ?? rec.price)) / (rec.lev || 1);
-      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.entry ?? rec.price, mark: rec.price, roe: rec.roe ?? 0, lev: rec.lev ?? 1, dec, margin, maint: rec.qty * rec.price * MM, pnl: rec.realized ?? 0, mode: "cross", closed: true });
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.entry ?? rec.price, mark: rec.price, roe: rec.roe ?? 0, lev: rec.lev ?? 1, dec, margin, maint: margin * MM, pnl: rec.realized ?? 0, mode: "cross", closed: true });
     } else {
       const live = prices[rec.sym]?.px ?? rec.price;
       const pnl = (rec.dir === "long" ? (live - rec.price) : (rec.price - live)) * rec.qty;
       const margin = (rec.qty * rec.price) / (rec.leverage || 1);
       const roe = margin > 0 ? (pnl / margin) * 100 : 0;
-      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.price, mark: live, roe, lev: rec.leverage || 1, dec, margin, maint: rec.qty * live * MM, pnl, mode: "cross", closed: false });
+      setPnlCard({ sym: rec.sym, side: rec.dir, entry: rec.price, mark: live, roe, lev: rec.leverage || 1, dec, margin, maint: margin * MM, pnl, mode: "cross", closed: false });
     }
   }
   function setPct(pct) {

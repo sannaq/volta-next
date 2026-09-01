@@ -101,10 +101,17 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
         ' <span style="color:' + col + '">(' + (chg >= 0 ? "+" : "") + chg.toFixed(2) + '%)</span>';
     });
 
+    // 현물(spot) 우선 — 주문 체결가와 동일 소스 + 선물 WS 차단(한국 등) 회피. 실패 시 선물 폴백.
+    const SPOT_KLINES = "https://api.binance.com/api/v3/klines?symbol=" + bn + "&interval=" + tf;
+    const FUT_KLINES = "https://fapi.binance.com/fapi/v1/klines?symbol=" + bn + "&interval=" + tf;
+    async function fetchKlines(limit) {
+      try { const r = await fetch(SPOT_KLINES + "&limit=" + limit).then((x) => x.json()); if (Array.isArray(r) && r.length) return r; } catch (e) {}
+      try { const r = await fetch(FUT_KLINES + "&limit=" + limit).then((x) => x.json()); if (Array.isArray(r) && r.length) return r; } catch (e) {}
+      return null;
+    }
+
     (async () => {
-      let raw;
-      try { raw = await fetch("https://fapi.binance.com/fapi/v1/klines?symbol=" + bn + "&interval=" + tf + "&limit=300").then((r) => r.json()); }
-      catch (e) { return; }
+      const raw = await fetchKlines(300);
       if (dead || !Array.isArray(raw)) return;
       const data = toBars(raw);
       cs.setData(data.map((d) => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close })));
@@ -180,13 +187,18 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
       // 실시간 갱신: 마지막 바 + 폴링
       let last = Object.assign({}, data[data.length - 1]);
       const iv = IVMS[tf] || 900000;
-      function openWS() {
-        try { ws = new WebSocket("wss://fstream.binance.com/ws/" + bn.toLowerCase() + "@aggTrade"); } catch (e) { return; }
-        ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000; if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
-        ws.onclose = () => { if (!dead) setTimeout(() => { if (!dead) openWS(); }, 2500); };
+      const WS_URLS = ["wss://stream.binance.com:9443/ws/" + bn.toLowerCase() + "@aggTrade", "wss://fstream.binance.com/ws/" + bn.toLowerCase() + "@aggTrade"]; // 현물 우선, 선물 폴백
+      function openWS(idx) {
+        idx = idx || 0; if (idx >= WS_URLS.length) idx = 0;
+        try { ws = new WebSocket(WS_URLS[idx]); } catch (e) { return; }
+        let got = false;
+        ws.onmessage = (ev) => { got = true; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000; if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
+        ws.onclose = () => { if (!dead) setTimeout(() => { if (!dead) openWS(idx); }, 2500); };
+        // 4초 내 프레임 없으면 다른 소스로 전환(선물 차단 지역 대응)
+        setTimeout(() => { if (!dead && !got && ws && idx < WS_URLS.length - 1) { try { ws.onclose = null; ws.close(); } catch (e) {} openWS(idx + 1); } }, 4000);
       }
-      openWS();
-      poll = setInterval(() => { fetch("https://fapi.binance.com/fapi/v1/klines?symbol=" + bn + "&interval=" + tf + "&limit=2").then((r) => r.json()).then((rw) => { if (dead || !Array.isArray(rw) || !rw.length) return; const nb = toBars(rw)[rw.length - 1]; try { cs.update({ time: nb.time, open: nb.open, high: nb.high, low: nb.low, close: nb.close }); vs.update({ time: nb.time, value: nb.volume, color: nb.close >= nb.open ? "rgba(46,189,133,0.4)" : "rgba(246,70,93,0.4)" }); } catch (e) {} last = Object.assign({}, nb); }).catch(() => {}); }, 5000);
+      openWS(0);
+      poll = setInterval(async () => { const rw = await fetchKlines(2); if (dead || !Array.isArray(rw) || !rw.length) return; const nb = toBars(rw)[rw.length - 1]; try { cs.update({ time: nb.time, open: nb.open, high: nb.high, low: nb.low, close: nb.close }); vs.update({ time: nb.time, value: nb.volume, color: nb.close >= nb.open ? "rgba(46,189,133,0.4)" : "rgba(246,70,93,0.4)" }); } catch (e) {} last = Object.assign({}, nb); }, 5000);
     })();
 
     return () => { dead = true; if (ws) try { ws.onclose = null; ws.close(); } catch (e) {} if (poll) clearInterval(poll); try { chart.remove(); } catch (e) {} };
