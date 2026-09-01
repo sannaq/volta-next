@@ -187,6 +187,8 @@ function Trade({ sessionUid }) {
               const payment = pos.qty * mark * rate * (pos.side === "long" ? 1 : -1);
               cash -= payment; total += payment; // 펀딩>0: 롱 지불, 숏 수취
             }
+            // 현금 0 하한: 펀딩이 남은 현금을 초과하면 낼 수 있는 만큼만(계좌 음수 방지, 정합성 유지)
+            if (cash < 0) { total += cash; cash = 0; }
             return { ...a, cashUSDT: cash, realizedPnL: (a.realizedPnL || 0) - total };
           });
           setTimeout(() => toastMsg("펀딩비 정산 완료"), 0);
@@ -218,8 +220,9 @@ function Trade({ sessionUid }) {
   const posCur = (acct.positions || {})[cur];
   const orderDir = side === "buy" ? "long" : "short";
   const isOpening = !posCur || posCur.side === orderDir;   // 진입/추가 vs 감소/청산
-  // 주문 증거금 기준: 격리=가용예수금 / 크로스=예수금+미실현이익(계좌 전체 담보)
-  const freeBase = Math.max(0, marginMode === "cross" ? acct.cashUSDT + summary.upnl : acct.cashUSDT);
+  // 주문 증거금 기준 = 가용 예수금(현금). 청산이 포지션별(격리식)이라 크로스도 현금 기준으로 통일 →
+  // 미실현이익을 매수여력에 넣었다가 급변동으로 이익이 사라져 계좌가 음수가 되는 문제 방지.
+  const freeBase = Math.max(0, acct.cashUSDT);
   function submit() {
     // 실시간 가격 도착 전(시드값)에는 주문 차단 — 가짜 가격 진입으로 인한 즉시 청산 방지
     if (!p.live || !(p.px > 0)) return toastMsg("실시간 가격 불러오는 중 — 잠시 후 다시 시도하세요");
@@ -977,7 +980,7 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
   const positions = { ...(a.positions || {}) };
   const dir = side === "buy" ? "long" : "short";
   // 강제청산은 수수료 면제 → 손실이 정확히 증거금까지만(-100%), 계좌 음수 방지
-  const fee = kind === "liquidation" ? 0 : qty * price * FEE;
+  let fee = kind === "liquidation" ? 0 : qty * price * FEE;
   let cash = a.cashUSDT - fee;
   let realizedGross = 0, closing = false, closedSide, closeEntry, closeLev, closeRoe;
   const pos = positions[sym];
@@ -1026,6 +1029,8 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
     }
   }
 
+  // 현금 0 하한: 청산분 손실+수수료가 예수금을 초과하면 초과 수수료 면제(계좌 음수 방지, 정합성 유지)
+  if (closing && kind !== "liquidation" && cash < 0) { fee += cash; cash = 0; }
   const rec = { sym, side, qty, price, fee, kind, t: Date.now() };
   if (closing) { rec.reduce = true; rec.dir = closedSide; rec.realized = realizedGross - fee; rec.entry = closeEntry; rec.lev = closeLev; rec.roe = closeRoe; }
   else { rec.dir = dir; rec.leverage = lev; }
