@@ -4,8 +4,7 @@ import Link from "next/link";
 import { brand } from "@/lib/brand.config";
 import { buildAdminData } from "@/lib/adminMockData";
 import { listTrackedUsers } from "@/lib/tracking";
-import { supabase, supabaseEnabled } from "@/lib/supabase";
-import { freshWallet } from "@/lib/useWallet";
+import { supabaseEnabled } from "@/lib/supabase";
 
 /**
  * 관리자 대시보드 — **합성(가짜) 데모 데이터** 전용.
@@ -15,29 +14,42 @@ import { freshWallet } from "@/lib/useWallet";
 // 관리자 계정: 환경변수(NEXT_PUBLIC_ADMIN_ID / _PW)로 지정, 없으면 기본값.
 // ⚠️ 클라이언트 게이트는 편의용이며 실보안이 아닙니다(번들에 노출). 실서비스는
 //    Supabase role='admin' 서버검증(supabase/schema.sql)으로 전환하세요.
-const DEMO_ADMIN = {
-  id: process.env.NEXT_PUBLIC_ADMIN_ID || "admin",
-  pw: process.env.NEXT_PUBLIC_ADMIN_PW || "volta-admin-2026!",
-};
+const DEMO_ADMIN = { id: process.env.NEXT_PUBLIC_ADMIN_ID || "admin" };
 const FLAG = "volta_admin_session";
+const SECRET_KEY = "volta_admin_secret";
+
+// 모든 관리자 작업은 서버 라우트(/api/admin)에서 비밀번호를 검증한 뒤 수행한다(번들 노출 X).
+async function adminApi(action, extra) {
+  let secret = ""; try { secret = sessionStorage.getItem(SECRET_KEY) || ""; } catch (_) {}
+  try {
+    const res = await fetch("/api/admin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret, id: DEMO_ADMIN.id, action, ...(extra || {}) }) });
+    return await res.json();
+  } catch (_) { return { ok: false, error: "network" }; }
+}
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
   useEffect(() => { try { setAuthed(sessionStorage.getItem(FLAG) === "1"); } catch (_) {} }, []);
   if (!authed) return <Gate onOk={() => setAuthed(true)} />;
-  return <Dashboard onLogout={() => { try { sessionStorage.removeItem(FLAG); } catch (_) {} setAuthed(false); }} />;
+  return <Dashboard onLogout={() => { try { sessionStorage.removeItem(FLAG); sessionStorage.removeItem(SECRET_KEY); } catch (_) {} setAuthed(false); }} />;
 }
 
 function Gate({ onOk }) {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
-  function submit(e) {
-    e.preventDefault();
-    if (id === DEMO_ADMIN.id && pw === DEMO_ADMIN.pw) {
-      try { sessionStorage.setItem(FLAG, "1"); } catch (_) {}
-      onOk();
-    } else setErr("접근 정보가 올바르지 않습니다.");
+  const [busy, setBusy] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); setErr(""); setBusy(true);
+    try { sessionStorage.setItem(SECRET_KEY, pw); } catch (_) {}
+    let res;
+    try {
+      const r = await fetch("/api/admin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret: pw, id, action: "login" }) });
+      res = await r.json();
+    } catch (_) { res = { ok: false, error: "network" }; }
+    setBusy(false);
+    if (res.ok) { try { sessionStorage.setItem(FLAG, "1"); } catch (_) {} onOk(); }
+    else { try { sessionStorage.removeItem(SECRET_KEY); } catch (_) {} setErr(res.error === "server_not_configured" ? "서버 설정 필요: ADMIN_PW 환경변수" : res.error === "db_not_configured" ? "서버 설정 필요: SUPABASE 키" : "접근 정보가 올바르지 않습니다."); }
   }
   return (
     <main className="min-h-screen grid place-items-center px-5" style={{ background: "var(--bg)" }}>
@@ -53,7 +65,7 @@ function Gate({ onOk }) {
           <input value={id} onChange={(e) => setId(e.target.value)} className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand mb-3.5" placeholder="admin" />
           <label className="block text-[13px] text-muted mb-1.5">비밀번호</label>
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} className="w-full px-3.5 py-3 bg-bg2 border border-line rounded-[10px] text-ink text-sm outline-none focus:border-brand" placeholder="••••••••" />
-          <button className="btn btn-primary w-full py-3 mt-5 text-white">로그인</button>
+          <button disabled={busy} className="btn btn-primary w-full py-3 mt-5 text-white disabled:opacity-60">{busy ? "확인 중…" : "로그인"}</button>
         </form>
         {err && <div className="text-down text-xs text-center mt-3">{err}</div>}
         <div className="text-muted2 text-[11px] text-center mt-4">관리자 전용 · 계정은 환경변수(NEXT_PUBLIC_ADMIN_ID/_PW)로 설정</div>
@@ -68,7 +80,8 @@ function Dashboard({ onLogout }) {
   useEffect(() => { setData(buildAdminData(Date.now())); }, []);
   useEffect(() => {
     let alive = true;
-    const load = () => listTrackedUsers().then((u) => { if (alive) setTracked(u || []); });
+    const mapTk = (r) => ({ username: r.username, roi: r.roi || 0, equity: r.equity || 0, loginCount: r.login_count || 0, firstSeen: r.first_seen ? +new Date(r.first_seen) : null, lastLogin: r.last_login ? +new Date(r.last_login) : null });
+    const load = () => adminApi("list").then((j) => { if (!alive) return; if (j && j.ok) setTracked((j.tracking || []).map(mapTk)); else listTrackedUsers().then((u) => { if (alive) setTracked(u || []); }); });
     load();
     const t = setInterval(load, 5000);
     return () => { alive = false; clearInterval(t); };
@@ -232,11 +245,9 @@ function WalletAdmin() {
   const [detail, setDetail] = useState(null);
 
   async function load() {
-    if (!supabaseEnabled) return;
-    try {
-      const { data } = await supabase.from("wallets").select("username,data,updated_at").order("updated_at", { ascending: false });
-      setWallets(data || []);
-    } catch (_) {}
+    const j = await adminApi("list");
+    if (j && j.ok) setWallets(j.wallets || []);
+    else if (j && j.error === "unauthorized") { try { sessionStorage.removeItem(FLAG); sessionStorage.removeItem(SECRET_KEY); } catch (_) {} location.reload(); }
   }
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
 
@@ -256,29 +267,23 @@ function WalletAdmin() {
     const amt = Math.floor(Number(s) || 0);
     if (!(amt > 0)) return; // 지급은 양수만(음수로 잔고·원금 음수 되는 것 방지)
     setBusy(username);
-    const d = w.data || {};
-    const next = { ...d, cashUSDT: (d.cashUSDT || 0) + amt, principal: (d.principal || 0) + amt, ledger: [{ type: "deposit", amt, t: Date.now() }, ...(d.ledger || [])].slice(0, 100) };
-    try { await supabase.from("wallets").upsert({ username, data: next, updated_at: new Date().toISOString() }, { onConflict: "username" }); setNote(`${username} 에게 ${amt.toLocaleString()} USDT 지급 완료 (회원 재접속 시 반영)`); } catch (_) { setNote("지급 실패"); }
+    const j = await adminApi("grant", { username, amount: amt });
+    setNote(j && j.ok ? `${username} 에게 ${amt.toLocaleString()} USDT 지급 완료 (회원 재접속 시 반영)` : "지급 실패: " + ((j && j.error) || ""));
     setBusy(""); load();
   }
   async function resetUser(username) {
     if (!window.confirm(`[${username}] 계좌를 초기 시드로 초기화할까요? (되돌릴 수 없음)`)) return;
     setBusy(username);
-    try { await supabase.from("wallets").upsert({ username, data: freshWallet(), updated_at: new Date().toISOString() }, { onConflict: "username" }); setNote(`${username} 계좌 초기화 완료 (회원 재접속 시 반영)`); } catch (_) { setNote("초기화 실패"); }
+    const j = await adminApi("reset", { username });
+    setNote(j && j.ok ? `${username} 계좌 초기화 완료 (회원 재접속 시 반영)` : "초기화 실패: " + ((j && j.error) || ""));
     setBusy(""); load();
   }
   async function deleteUser(username) {
     if (username === DEMO_ADMIN.id) { setNote("관리자 본인 계정은 삭제할 수 없습니다."); return; }
     if (!window.confirm(`[${username}] 계정을 완전 삭제할까요?\n지갑·거래기록·로그인기록 전부 삭제되며 되돌릴 수 없습니다.`)) return;
     setBusy(username);
-    try {
-      await Promise.all([
-        supabase.from("wallets").delete().eq("username", username),
-        supabase.from("user_tracking").delete().eq("username", username),
-        supabase.from("login_events").delete().eq("username", username),
-      ]);
-      setNote(`${username} 계정 삭제 완료`);
-    } catch (_) { setNote("삭제 실패"); }
+    const j = await adminApi("delete", { username });
+    setNote(j && j.ok ? `${username} 계정 삭제 완료` : "삭제 실패: " + ((j && j.error) || ""));
     setBusy(""); load();
   }
 
