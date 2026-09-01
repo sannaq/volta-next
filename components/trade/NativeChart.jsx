@@ -62,6 +62,7 @@ function findOrderBlocks(cs, cur) { var n = cs.length; if (n < 8) return []; var
 export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
   const wrapRef = useRef(null);
   const legendRef = useRef(null);
+  const klinesRef = useRef({ key: "", data: null }); // 과거 klines 캐시(지표 토글 시 재요청 방지)
   const [tf, setTf] = useState("15m");
   const [lineOn, setLineOn] = useState({ cloud: true, ribbon: true, struct: true, signal: true, sr: true, tr: false, ch: false, ema: false, poc: true, fib: false, ob: true });
 
@@ -111,7 +112,11 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
     }
 
     (async () => {
-      const raw = await fetchKlines(300);
+      // 같은 심볼·타임프레임이면 캐시된 과거 데이터 재사용(지표 on/off로 인한 REST 재요청·429 방지)
+      const cacheKey = bn + "|" + tf;
+      let raw;
+      if (klinesRef.current.key === cacheKey && klinesRef.current.data) raw = klinesRef.current.data;
+      else { raw = await fetchKlines(300); if (Array.isArray(raw) && raw.length) klinesRef.current = { key: cacheKey, data: raw }; }
       if (dead || !Array.isArray(raw)) return;
       const data = toBars(raw);
       cs.setData(data.map((d) => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close })));

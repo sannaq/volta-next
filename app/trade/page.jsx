@@ -300,7 +300,8 @@ function Trade({ sessionUid }) {
     // 진입: 명목 = 여력 × % (수수료 반영: 증거금+수수료 = 여력)  /  청산: 포지션 명목 × %
     const maxNotional = freeBase / (1 / leverage + (brand.feeRate || 0));
     const notional = isOpening ? maxNotional * pct : (posCur?.qty || 0) * px * pct;
-    setAmount(notional.toFixed(2));
+    // 센트 단위 내림 → 반올림으로 여력을 초과해 "증거금 부족"으로 거부되는 것 방지(100% 버튼)
+    setAmount((Math.floor(notional * 100) / 100).toFixed(2));
   }
 
   const fmt = (v) => v == null ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: coin.dec, maximumFractionDigits: coin.dec });
@@ -505,7 +506,8 @@ function Trade({ sessionUid }) {
               {[0.25, 0.5, 0.75, 1].map((pct) => <button key={pct} onClick={() => setPct(pct)} className="flex-1 py-1 bg-panel2 border border-line rounded-md text-[11px] text-muted hover:text-ink">{pct * 100}%</button>)}
             </div>
             {(() => {
-              const epx = type === "market" ? p.px : (parseFloat(price) || p.px);
+              // 미리보기 수량 기준가: 시장가=현재가, 지정가=지정가, 조건부=트리거가(실제 체결가와 일치)
+              const epx = type === "stop" ? (parseFloat(trigger) || p.px) : type === "limit" ? (parseFloat(price) || p.px) : p.px;
               const amtN = parseFloat(amount) || 0;
               const estQty = epx ? amtN / epx : 0;
               const estMargin = isOpening ? amtN / leverage : 0;
