@@ -210,6 +210,8 @@ function Trade({ sessionUid }) {
   // 주문 증거금 기준: 격리=가용예수금 / 크로스=예수금+미실현이익(계좌 전체 담보)
   const freeBase = Math.max(0, marginMode === "cross" ? acct.cashUSDT + summary.upnl : acct.cashUSDT);
   function submit() {
+    // 실시간 가격 도착 전(시드값)에는 주문 차단 — 가짜 가격 진입으로 인한 즉시 청산 방지
+    if (!p.live || !(p.px > 0)) return toastMsg("실시간 가격 불러오는 중 — 잠시 후 다시 시도하세요");
     const amt = parseFloat(amount), pr = parseFloat(price), tr = parseFloat(trigger);
     if (!(amt > 0)) return toastMsg("금액을 입력하세요");
     if (type === "limit" && !(pr > 0)) return toastMsg("가격을 입력하세요");
@@ -1031,6 +1033,8 @@ function checkLiquidations(a, prices) {
   for (const sym of Object.keys(na.positions || {})) {
     const pos = na.positions[sym];
     if (!pos || pos.qty <= 1e-12) continue;
+    // 실시간 가격이 도착한(live) 종목만 청산 검사 — 시드/스테일 가격으로 인한 오청산 방지
+    if (!prices[sym]?.live) continue;
     const px = prices[sym]?.px;
     if (px == null) continue;
     const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
