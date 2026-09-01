@@ -254,7 +254,7 @@ function WalletAdmin() {
   async function grant(username, w) {
     const s = window.prompt(`[${username}] 에게 지급할 가상자금 (USDT):`, "1000");
     const amt = Math.floor(Number(s) || 0);
-    if (!amt) return;
+    if (!(amt > 0)) return; // 지급은 양수만(음수로 잔고·원금 음수 되는 것 방지)
     setBusy(username);
     const d = w.data || {};
     const next = { ...d, cashUSDT: (d.cashUSDT || 0) + amt, principal: (d.principal || 0) + amt, ledger: [{ type: "deposit", amt, t: Date.now() }, ...(d.ledger || [])].slice(0, 100) };

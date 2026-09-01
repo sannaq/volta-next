@@ -16,7 +16,8 @@ export default function LiquidationMap({ symbol = "BTC", compact = false, heatma
     const root = rootRef.current;
     if (!root) return;
     root.innerHTML = liqHTML(compact);
-    const initSym = String(symbol || "BTC").toUpperCase().replace(/USDT$/, "");
+    // 심볼 문자 정제(A-Z0-9만) — innerHTML(pills)로 들어가므로 XSS 방지
+    const initSym = (String(symbol || "BTC").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/USDT$/, "")) || "BTC";
     const engine = makeLiqEngine(root, initSym, { compact, heatmap });
     engineRef.current = engine;
     engine.start();
@@ -93,7 +94,7 @@ function makeLiqEngine(root, initSym, opts) {
   var SYMS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'ADA', 'DOGE']; if (SYMS.indexOf(initSym) < 0) SYMS.unshift(initSym);
   var TFS = [['1m', '1분'], ['5m', '5분'], ['15m', '15분'], ['1h', '1시간'], ['4h', '4시간'], ['12h', '12시간'], ['1d', '24시간'], ['3d', '3일']];
   var LINES = [['sr', '지지/저항', '#2ebd85'], ['tr', '추세선', '#e0a83e'], ['ch', '회귀채널', '#4a9eff']];
-  var st = { sym: initSym || 'BTC', tf: '15m', candles: [], price: 0, chg: 0, bins: new Map(), model: new Map(), binUsd: 50, binFixed: false, oiUsd: 0, tot: 0, cnt: 0, ws: null, feed: [], hover: null, deriv: null, lineOn: { sr: true, tr: true, ch: true }, showHeat: opts.heatmap !== false };
+  var st = { sym: initSym || 'BTC', tf: '15m', gen: 0, candles: [], price: 0, chg: 0, bins: new Map(), model: new Map(), binUsd: 50, binFixed: false, oiUsd: 0, tot: 0, cnt: 0, ws: null, feed: [], hover: null, deriv: null, lineOn: { sr: true, tr: true, ch: true }, showHeat: opts.heatmap !== false };
   var stopped = false, timers = [], dirty = true;
   function fmtPx(v) { if (!v && v !== 0) return '—'; if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 1 }); if (v >= 1) return v.toFixed(3); return v.toFixed(5); }
   function fmtUsd(v) { if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B'; if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M'; if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K'; return '$' + Math.round(v); }
@@ -126,16 +127,17 @@ function makeLiqEngine(root, initSym, opts) {
   function pivotsC(cs, w, type) { var r = []; for (var i = w; i < cs.length - w; i++) { var ok = true; for (var j = i - w; j <= i + w; j++) { if (j === i) continue; if (type === 'low' && cs[j].l < cs[i].l) { ok = false; break; } if (type === 'high' && cs[j].h > cs[i].h) { ok = false; break; } } if (ok) r.push(i); } return r; }
   function api(sym) { return sym + 'USDT'; }
   function tfMin() { return { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '12h': 720, '1d': 1440, '3d': 4320 }[st.tf] || 15; }
-  function loadKlines() { return fetch('https://fapi.binance.com/fapi/v1/klines?symbol=' + api(st.sym) + '&interval=' + st.tf + '&limit=200').then(function (r) { return r.json(); }).then(function (a) { if (!Array.isArray(a)) throw 0; st.candles = a.map(function (k) { return { t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }; }); var last = st.candles[st.candles.length - 1]; st.price = last.c; var first24 = st.candles[Math.max(0, st.candles.length - Math.round((24 * 60) / tfMin()))]; st.chg = first24 ? ((last.c - first24.o) / first24.o * 100) : 0; if (!st.binFixed) fixBin(); buildModelHeat(); }); }
-  function loadTicker() { return fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=' + api(st.sym)).then(function (r) { return r.json(); }).then(function (t) { if (t && t.lastPrice) { st.price = +t.lastPrice; st.chg = +t.priceChangePercent; } }).catch(function () { }); }
-  function loadOI() { return fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=' + api(st.sym)).then(function (r) { return r.json(); }).then(function (o) { if (o && o.openInterest) { st.oiUsd = +o.openInterest * (st.price || 1); } }).catch(function () { }); }
+  function loadKlines() { var g = st.gen; return fetch('https://fapi.binance.com/fapi/v1/klines?symbol=' + api(st.sym) + '&interval=' + st.tf + '&limit=200').then(function (r) { return r.json(); }).then(function (a) { if (g !== st.gen) return; if (!Array.isArray(a) || !a.length) throw 0; st.candles = a.map(function (k) { return { t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }; }); var last = st.candles[st.candles.length - 1]; st.price = last.c; var first24 = st.candles[Math.max(0, st.candles.length - Math.round((24 * 60) / tfMin()))]; st.chg = first24 ? ((last.c - first24.o) / first24.o * 100) : 0; if (!st.binFixed) fixBin(); buildModelHeat(); }); }
+  function loadTicker() { var g = st.gen; return fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=' + api(st.sym)).then(function (r) { return r.json(); }).then(function (t) { if (g !== st.gen) return; if (t && t.lastPrice) { st.price = +t.lastPrice; st.chg = +t.priceChangePercent; } }).catch(function () { }); }
+  function loadOI() { var g = st.gen; return fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=' + api(st.sym)).then(function (r) { return r.json(); }).then(function (o) { if (g !== st.gen) return; if (o && o.openInterest) { st.oiUsd = +o.openInterest * (st.price || 1); } }).catch(function () { }); }
   function loadDeriv() {
+    var g = st.gen;
     var s = api(st.sym), F = 'https://fapi.binance.com/fapi/v1/', D = 'https://fapi.binance.com/futures/data/'; Promise.all([
       fetch(F + 'premiumIndex?symbol=' + s).then(function (r) { return r.json(); }).catch(function () { return null; }),
       fetch(D + 'globalLongShortAccountRatio?symbol=' + s + '&period=5m&limit=1').then(function (r) { return r.json(); }).catch(function () { return null; }),
       fetch(D + 'topLongShortPositionRatio?symbol=' + s + '&period=5m&limit=1').then(function (r) { return r.json(); }).catch(function () { return null; }),
       fetch(D + 'openInterestHist?symbol=' + s + '&period=5m&limit=2').then(function (r) { return r.json(); }).catch(function () { return null; })
-    ]).then(function (r) { if (stopped) return; st.deriv = { fund: r[0], ls: (r[1] && r[1][0]), top: (r[2] && r[2][0]), oih: r[3] }; renderDeriv(); });
+    ]).then(function (r) { if (stopped || g !== st.gen) return; st.deriv = { fund: r[0], ls: (r[1] && r[1][0]), top: (r[2] && r[2][0]), oih: r[3] }; renderDeriv(); });
   }
   function renderDeriv() {
     var el = $('#lqDeriv'); if (!el) return; var d = st.deriv; if (!d) { el.innerHTML = ''; return; }
@@ -191,8 +193,8 @@ function makeLiqEngine(root, initSym, opts) {
     LINES.forEach(function (L) { var b = document.createElement('button'); b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); b.textContent = L[1]; b.style.borderLeft = '3px solid ' + L[2]; b.onclick = function () { st.lineOn[L[0]] = !st.lineOn[L[0]]; b.className = 'lqpill' + (st.lineOn[L[0]] ? ' on' : ''); dirty = true; }; lp.appendChild(b); });
     if (compact) { var hb = document.createElement('button'); hb.className = 'lqpill' + (st.showHeat ? ' on' : ''); hb.textContent = '🔥 히트맵'; hb.onclick = function () { st.showHeat = !st.showHeat; hb.className = 'lqpill' + (st.showHeat ? ' on' : ''); dirty = true; }; lp.appendChild(hb); }
   }
-  function switchSym(s) { if (s === st.sym) return; st.sym = s; st.binFixed = false; st.bins = new Map(); st.model = new Map(); st.oiUsd = 0; st.tot = 0; st.cnt = 0; st.feed = []; st.candles = []; st.deriv = null; buildPills(); var lg = $('#lqLgSym'); if (lg) lg.textContent = s; renderFeed(); renderDeriv(); loadKlines().then(function () { return loadOI(); }).then(renderStats).catch(function () { }); connectWS(); loadDeriv(); dirty = true; }
-  function switchTf(t) { if (t === st.tf) return; st.tf = t; st.binFixed = false; st.bins = new Map(); buildPills(); var lg = $('#lqLgTf'); if (lg) lg.textContent = (TFS.filter(function (x) { return x[0] === t; })[0] || ['', '15분'])[1]; loadKlines().then(function () { dirty = true; }).catch(function () { }); }
+  function switchSym(s) { if (s === st.sym) return; st.gen++; st.sym = s; st.binFixed = false; st.bins = new Map(); st.model = new Map(); st.oiUsd = 0; st.tot = 0; st.cnt = 0; st.feed = []; st.candles = []; st.deriv = null; buildPills(); var lg = $('#lqLgSym'); if (lg) lg.textContent = s; renderFeed(); renderDeriv(); loadKlines().then(function () { return loadOI(); }).then(renderStats).catch(function () { }); connectWS(); loadDeriv(); dirty = true; }
+  function switchTf(t) { if (t === st.tf) return; st.gen++; st.tf = t; st.binFixed = false; st.bins = new Map(); buildPills(); var lg = $('#lqLgTf'); if (lg) lg.textContent = (TFS.filter(function (x) { return x[0] === t; })[0] || ['', '15분'])[1]; loadKlines().then(function () { dirty = true; }).catch(function () { }); }
   function searchCoin(raw) { var inp = $('#lqSearch'), s = (raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/USDT$/, ''); if (!s) return; if (inp) inp.placeholder = '🔍 ' + s + ' 확인 중…'; fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + s + 'USDT').then(function (r) { return r.json(); }).then(function (j) { if (j && j.price) { if (SYMS.indexOf(s) < 0) { SYMS.unshift(s); if (SYMS.length > 9) SYMS.pop(); } switchSym(s); if (inp) { inp.value = ''; inp.placeholder = '🔍 코인 검색 (예: ADA·1000PEPE·SUI)'; } } else { if (inp) inp.placeholder = '❌ 없는 심볼: ' + s; } }).catch(function () { if (inp) inp.placeholder = '❌ 검색 실패 · 다시'; }); }
   function start() {
     cv = $('#lqChart'); if (!cv) return; ctx = cv.getContext('2d'); var lg = $('#lqLgSym'); if (lg) lg.textContent = st.sym;

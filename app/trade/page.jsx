@@ -41,7 +41,8 @@ function TradeGuard() {
 function Trade({ sessionUid }) {
   const sp = useSearchParams();
   const { prices, connected } = useBinanceStream();
-  const [cur, setCur] = useState(sp.get("sym") || "BTC");
+  // URL ?sym= 은 innerHTML(차트 범례/청산맵 pills)로 흘러가므로 문자 정제(XSS 방지)
+  const [cur, setCur] = useState((sp.get("sym") || "BTC").toUpperCase().replace(/[^A-Z0-9]/g, "") || "BTC");
   const [side, setSide] = useState("buy");
   const [tf, setTf] = useState("1");
   const [chartSrc, setChartSrc] = useState("native"); // native(분석차트) | tv(TradingView) — 롤백 시 "tv"로
@@ -1026,7 +1027,9 @@ function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts
       if (flip > dust) {
         const margin = (flip * price) / lev;
         cash -= margin;
-        positions[sym] = { side: dir, qty: flip, entry: price, margin, tp, sl };
+        // 반전(flip) 포지션엔 주문 TP/SL을 붙이지 않는다: submit은 반전 시 TP/SL 방향을 검증하지 않아
+        // 이전 방향 기준 값이 넘어오면 즉시 오발동(즉시 청산)할 수 있음. 반전 후 별도 설정하도록 함.
+        positions[sym] = { side: dir, qty: flip, entry: price, margin };
       }
     }
   }

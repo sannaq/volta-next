@@ -94,7 +94,8 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
       const up = b.close >= b.open, col = up ? "#2ebd85" : "#f6465d", d = decimals;
       const f = (v) => v.toLocaleString("en-US", { maximumFractionDigits: d });
       const chg = b.open ? ((b.close - b.open) / b.open * 100) : 0;
-      lg.innerHTML = '<b style="color:#e8ecf3">' + String(symbol).toUpperCase() + '</b> · ' + tf +
+      const symSafe = String(symbol).toUpperCase().replace(/[^A-Z0-9]/g, ""); // innerHTML XSS 방지
+      lg.innerHTML = '<b style="color:#e8ecf3">' + symSafe + '</b> · ' + tf +
         '&nbsp;&nbsp;시 <span style="color:' + col + '">' + f(b.open) + '</span>' +
         ' 고 <span style="color:' + col + '">' + f(b.high) + '</span>' +
         ' 저 <span style="color:' + col + '">' + f(b.low) + '</span>' +
@@ -187,7 +188,7 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
           else if (seX && rsi[i] <= 50 && rsi[i] > 28 && !rUp && i - lastShort >= COOL) { markers.push({ time: data[i].time, position: "aboveBar", color: "#f6465d", shape: "arrowDown", text: "매도" }); lastShort = i; }
         }
       }
-      if (markers.length) { markers.sort((a, b) => a.time - b.time); cs.setMarkers(markers); }
+      if (markers.length) { markers.sort((a, b) => a.time - b.time); const seen = new Set(); const uniq = []; for (const m of markers) { if (seen.has(m.time)) continue; seen.add(m.time); uniq.push(m); } cs.setMarkers(uniq); }
 
       // 실시간 갱신: 마지막 바 + 폴링
       let last = Object.assign({}, data[data.length - 1]);
@@ -195,12 +196,13 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
       const WS_URLS = ["wss://stream.binance.com:9443/ws/" + bn.toLowerCase() + "@aggTrade", "wss://fstream.binance.com/ws/" + bn.toLowerCase() + "@aggTrade"]; // 현물 우선, 선물 폴백
       function openWS(idx) {
         idx = idx || 0; if (idx >= WS_URLS.length) idx = 0;
-        try { ws = new WebSocket(WS_URLS[idx]); } catch (e) { return; }
+        let sock; try { sock = new WebSocket(WS_URLS[idx]); } catch (e) { return; }
+        ws = sock;
         let got = false;
-        ws.onmessage = (ev) => { got = true; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000; if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
-        ws.onclose = () => { if (!dead) setTimeout(() => { if (!dead) openWS(idx); }, 2500); };
-        // 4초 내 프레임 없으면 다른 소스로 전환(선물 차단 지역 대응)
-        setTimeout(() => { if (!dead && !got && ws && idx < WS_URLS.length - 1) { try { ws.onclose = null; ws.close(); } catch (e) {} openWS(idx + 1); } }, 4000);
+        sock.onmessage = (ev) => { got = true; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000; if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
+        sock.onclose = () => { if (!dead && ws === sock) setTimeout(() => { if (!dead && ws === sock) openWS(idx); }, 2500); };
+        // 4초 내 프레임 없으면 다른 소스로 전환(선물 차단 지역 대응) — 이 소켓이 아직 현재 소켓일 때만
+        setTimeout(() => { if (!dead && !got && ws === sock && idx < WS_URLS.length - 1) { try { sock.onclose = null; sock.close(); } catch (e) {} openWS(idx + 1); } }, 4000);
       }
       openWS(0);
       poll = setInterval(async () => { const rw = await fetchKlines(2); if (dead || !Array.isArray(rw) || !rw.length) return; const nb = toBars(rw)[rw.length - 1]; try { cs.update({ time: nb.time, open: nb.open, high: nb.high, low: nb.low, close: nb.close }); vs.update({ time: nb.time, value: nb.volume, color: nb.close >= nb.open ? "rgba(46,189,133,0.4)" : "rgba(246,70,93,0.4)" }); } catch (e) {} last = Object.assign({}, nb); }, 5000);
