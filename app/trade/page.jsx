@@ -325,8 +325,8 @@ function Trade({ sessionUid }) {
           <div className="flex items-center gap-2.5 px-3 py-1.5 bg-panel border border-line rounded-[10px]">
             <span className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-extrabold text-white" style={{ background: coin.color }}>{cur.slice(0, 2)}</span>
             <span className="font-bold text-[15px]">{cur}/USDT</span>
-            <span className={`font-bold ${up ? "text-up" : "text-down"}`}>{fmt(p.px)}</span>
-            <span className={`text-xs ${up ? "text-up" : "text-down"}`}>{up ? "+" : ""}{(p.chg ?? 0).toFixed(2)}%</span>
+            <span className={`font-bold ${up ? "text-up" : "text-down"}`}>{p.live ? fmt(p.px) : "—"}</span>
+            <span className={`text-xs ${up ? "text-up" : "text-down"}`}>{p.live ? `${up ? "+" : ""}${(p.chg ?? 0).toFixed(2)}%` : ""}</span>
           </div>
         )}
         {view === "trade" && (
@@ -368,8 +368,8 @@ function Trade({ sessionUid }) {
                   <span className="w-6 h-6 rounded-full grid place-items-center text-[10px] font-extrabold text-white shrink-0" style={{ background: c.color }}>{c.sym.slice(0, 2)}</span>
                   <div><div className="font-semibold">{c.sym}<span className="text-muted2">/USDT</span></div><div className="text-[10px] text-muted2">{c.name}</div></div>
                   <div className="ml-auto text-right">
-                    <div className="font-bold text-xs tabnum">{cp.px ? cp.px.toLocaleString("en-US", { maximumFractionDigits: c.dec }) : "—"}</div>
-                    <div className={`text-[10px] font-semibold tabnum ${cu ? "text-up" : "text-down"}`}>{cu ? "+" : ""}{(cp.chg ?? 0).toFixed(2)}%</div>
+                    <div className="font-bold text-xs tabnum">{cp.live && cp.px ? cp.px.toLocaleString("en-US", { maximumFractionDigits: c.dec }) : "—"}</div>
+                    <div className={`text-[10px] font-semibold tabnum ${cu ? "text-up" : "text-down"}`}>{cp.live ? `${cu ? "+" : ""}${(cp.chg ?? 0).toFixed(2)}%` : ""}</div>
                   </div>
                 </div>
               );
@@ -418,7 +418,8 @@ function Trade({ sessionUid }) {
             {/* 내 포지션 (현재 종목) — 평균 진입단가 */}
             {posCur && (() => {
               const effLev = posCur.margin > 0 ? Math.round((posCur.qty * posCur.entry) / posCur.margin) : 1;
-              const pnl = (posCur.side === "long" ? (p.px - posCur.entry) : (posCur.entry - p.px)) * posCur.qty;
+              const mk = p.live ? p.px : posCur.entry; // 실시간 도착 전엔 진입가(손익 0)
+              const pnl = (posCur.side === "long" ? (mk - posCur.entry) : (posCur.entry - mk)) * posCur.qty;
               const pnlPct = posCur.margin > 0 ? (pnl / posCur.margin) * 100 : 0;
               return (
                 <div className="mb-2.5 rounded-lg bg-panel2 border border-line p-2.5 text-xs">
@@ -1097,7 +1098,7 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
           {syms.map((s) => {
             const pos = positions[s];
             const sym = pos.sym || s.split("#")[0];
-            const px = prices[sym]?.px ?? pos.entry;
+            const px = prices[sym]?.live ? prices[sym].px : pos.entry; // 실시간 도착 전엔 진입가(손익 0)
             const notional = pos.qty * pos.entry;
             const effLev = pos.margin > 0 ? notional / pos.margin : 1;
             const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
