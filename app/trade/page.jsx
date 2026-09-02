@@ -345,6 +345,7 @@ function Trade({ sessionUid }) {
           <span className="hidden sm:inline-block text-[10px] font-bold text-brand border border-brand/40 bg-brand/10 rounded-full px-2.5 py-1">모의투자 · 가상머니</span>
           <div className="hidden md:block"><span className="text-muted mr-1.5">계정</span><b>{uid}</b></div>
           <div><span className="text-muted mr-1.5">평가자산</span><b className="tabnum">${equity.toLocaleString("en-US", { maximumFractionDigits: 2 })}</b></div>
+          <div title="주문에 쓸 수 있는 실제 현금(미실현이익은 제외)"><span className="text-muted mr-1.5">가용</span><b className="tabnum text-brand">${Math.max(0, acct.cashUSDT).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b></div>
           <div><span className="text-muted mr-1.5">수익률</span>
             <b className={`tabnum ${summary.pnl >= 0 ? "text-up" : "text-down"}`}>{summary.pnl >= 0 ? "+" : ""}{summary.roi.toFixed(2)}%</b>
           </div>
