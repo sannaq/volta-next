@@ -257,8 +257,8 @@ function WalletAdmin() {
     const p = d?.positions || {}; const ks = Object.keys(p);
     if (!ks.length) return <span className="text-muted2">-</span>;
     return ks.map((s) => {
-      const x = p[s];
-      return <span key={s} className={`inline-block mr-1.5 ${x.side === "long" ? "text-up" : "text-down"}`}>{s} {x.side === "long" ? "롱" : "숏"} {(+x.qty).toFixed(4)}</span>;
+      const x = p[s]; const sym = x.sym || s.split("#")[0];
+      return <span key={s} className={`inline-block mr-1.5 ${x.side === "long" ? "text-up" : "text-down"}`}>{sym} {x.side === "long" ? "롱" : "숏"} {(+x.qty).toFixed(4)}</span>;
     });
   };
 

@@ -12,7 +12,10 @@ const IV = [["1m", "1분"], ["5m", "5분"], ["15m", "15분"], ["1h", "1시간"],
 const IVMS = { "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const LINES = [["cloud", "구름"], ["ribbon", "리본"], ["struct", "구조"], ["signal", "신호"], ["sr", "지지/저항"], ["tr", "추세선"], ["ch", "회귀채널"], ["ema", "EMA"], ["poc", "매물대"], ["fib", "피보"], ["ob", "OB"]];
 
-function toBars(raw) { return raw.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })); }
+// 로컬 시간대 오프셋(초). lightweight-charts는 시간을 UTC로 표시하므로, 바 시간에 오프셋을 더해
+// 화면이 사용자 로컬 시각(예: 한국 KST=UTC+9)으로 보이게 한다.
+function tzOffsetSec() { return -new Date().getTimezoneOffset() * 60; }
+function toBars(raw) { const o = tzOffsetSec(); return raw.map((k) => ({ time: Math.floor(k[0] / 1000) + o, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })); }
 function ema(v, p) { var k = 2 / (p + 1), e = v[0], o = [e], i; for (i = 1; i < v.length; i++) { e = v[i] * k + e * (1 - k); o.push(e); } return o; }
 // RSI(Wilder) 배열 — 앞 p개는 null
 function rsiArr(cl, p = 14) { const out = new Array(cl.length).fill(null); if (cl.length < p + 1) return out; let g = 0, l = 0; for (let i = 1; i <= p; i++) { const d = cl[i] - cl[i - 1]; if (d >= 0) g += d; else l -= d; } g /= p; l /= p; out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l); for (let i = p + 1; i < cl.length; i++) { const d = cl[i] - cl[i - 1], gg = d > 0 ? d : 0, ll = d < 0 ? -d : 0; g = (g * (p - 1) + gg) / p; l = (l * (p - 1) + ll) / p; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } return out; }
@@ -199,7 +202,7 @@ export default function NativeChart({ symbol = "BTC", decimals = 2 }) {
         let sock; try { sock = new WebSocket(WS_URLS[idx]); } catch (e) { return; }
         ws = sock;
         let got = false;
-        sock.onmessage = (ev) => { got = true; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000; if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
+        sock.onmessage = (ev) => { got = true; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } const p = +m.p; if (!p) return; const bt = Math.floor((m.T || Date.now()) / iv) * iv / 1000 + tzOffsetSec(); if (!last || bt > last.time) { last = { time: bt, open: p, high: p, low: p, close: p, volume: 0 }; } else { if (p > last.high) last.high = p; if (p < last.low) last.low = p; last.close = p; } try { cs.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close }); } catch (e) {} };
         sock.onclose = () => { if (!dead && ws === sock) setTimeout(() => { if (!dead && ws === sock) openWS(idx); }, 2500); };
         // 4초 내 프레임 없으면 다른 소스로 전환(선물 차단 지역 대응) — 이 소켓이 아직 현재 소켓일 때만
         setTimeout(() => { if (!dead && !got && ws === sock && idx < WS_URLS.length - 1) { try { sock.onclose = null; sock.close(); } catch (e) {} openWS(idx + 1); } }, 4000);

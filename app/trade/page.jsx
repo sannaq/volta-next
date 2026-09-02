@@ -94,14 +94,10 @@ function Trade({ sessionUid }) {
       const feeRate = brand.feeRate || 0;
       for (const o of fills) {
         const px = o.otype === "stop" ? prices[o.sym].px : o.price;
-        // 진입(신규/추가) 체결은 체결 시점 예수금으로 매수여력 재검증 → 음수 방지. 부족하면 미체결 유지.
-        const cp = na.positions?.[o.sym]; const dir = o.side === "buy" ? "long" : "short";
-        const isOpen = !cp || cp.side === dir;
-        if (isOpen) {
-          const notional = o.qty * px, lev = Math.max(1, o.leverage || 1);
-          if (notional / lev + notional * feeRate > na.cashUSDT + 1e-6) { keep.push(o); continue; }
-        }
-        na = applyFill(na, o.sym, o.side, o.qty, px, o.leverage || 1, o.otype === "stop" ? "stop" : "limit", { tp: o.tp, sl: o.sl });
+        // 지정가/조건부는 항상 진입(헤지: 매수=롱, 매도=숏). 체결 시점 예수금 재검증 → 음수 방지.
+        const notional = o.qty * px, lev = Math.max(1, o.leverage || 1);
+        if (notional / lev + notional * feeRate > na.cashUSDT + 1e-6) { keep.push(o); continue; }
+        na = openFill(na, o.sym, o.side, o.qty, px, o.leverage || 1, o.otype === "stop" ? "stop" : "limit", { tp: o.tp, sl: o.sl });
       }
       na = { ...na, openOrders: keep };
       return na;
@@ -113,13 +109,14 @@ function Trade({ sessionUid }) {
     if (!acct.positions || !Object.keys(acct.positions).length) return;
     setAcct((a) => {
       let na = a, changed = false; const notes = [];
-      for (const sym of Object.keys(na.positions)) {
-        const pos = na.positions[sym]; const px = prices[sym]?.px; if (px == null) continue;
+      for (const key of Object.keys(na.positions)) {
+        const pos = na.positions[key]; const sym = pos.sym || key.split("#")[0];
+        const px = prices[sym]?.px; if (px == null) continue;
         if (!prices[sym]?.live) continue; // 실시간 가격에서만 TP/SL 발동 — 시드값 오발동 방지
         const tpHit = pos.tp != null && (pos.side === "long" ? px >= pos.tp : px <= pos.tp);
         const slHit = pos.sl != null && (pos.side === "long" ? px <= pos.sl : px >= pos.sl);
         if (tpHit || slHit) {
-          na = applyFill(na, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, tpHit ? "tp" : "sl");
+          na = closeFill(na, key, pos.qty, px, tpHit ? "tp" : "sl");
           notes.push(`${tpHit ? "익절" : "손절"} ${sym}`); changed = true;
         }
       }
@@ -218,11 +215,13 @@ function Trade({ sessionUid }) {
 
   const book = useMemo(() => genBook(p.px, coin.dec), [p.px, coin.dec]);
 
-  const posCur = (acct.positions || {})[cur];
   const orderDir = side === "buy" ? "long" : "short";
-  const isOpening = !posCur || posCur.side === orderDir;   // 진입/추가 vs 감소/청산
-  // 주문 증거금 기준 = 가용 예수금(현금). 청산이 포지션별(격리식)이라 크로스도 현금 기준으로 통일 →
-  // 미실현이익을 매수여력에 넣었다가 급변동으로 이익이 사라져 계좌가 음수가 되는 문제 방지.
+  // 양방향(헤지): 한 코인에 롱·숏 별개 보유. 매수=롱 열기, 매도=숏 열기(반대 눌러도 청산 안 됨)
+  const posLong = (acct.positions || {})[posKey(cur, "long")];
+  const posShort = (acct.positions || {})[posKey(cur, "short")];
+  const posSame = orderDir === "long" ? posLong : posShort; // 주문 방향과 같은 쪽(물타기 대상)
+  const posCur = posSame;          // 주문폼 미니패널: 지금 거래하려는 방향의 포지션
+  const isOpening = true;          // 헤지: 매수/매도는 항상 진입(반대 청산 없음)
   const freeBase = Math.max(0, acct.cashUSDT);
   function submit() {
     // 실시간 가격 도착 전(시드값)에는 주문 차단 — 가짜 가격 진입으로 인한 즉시 청산 방지
@@ -234,8 +233,8 @@ function Trade({ sessionUid }) {
     const refPx = type === "stop" ? tr : (type === "limit" ? pr : p.px);
     if (!(refPx > 0)) return toastMsg("가격 정보 없음");
     const q = amt / refPx;                               // 수량 = 금액(명목) / 기준가
-    // TP/SL 방향 검증 (즉시 체결 방지)
-    if (isOpening && (tp || sl)) {
+    // TP/SL 방향 검증 (즉시 체결 방지) — 주문 방향(진입) 기준
+    if (tp || sl) {
       if (orderDir === "long") {
         if (tp && +tp <= refPx) return toastMsg("롱 익절가는 진입가보다 높아야 합니다");
         if (sl && +sl >= refPx) return toastMsg("롱 손절가는 진입가보다 낮아야 합니다");
@@ -245,19 +244,17 @@ function Trade({ sessionUid }) {
       }
     }
     const opts = { tp: tp || undefined, sl: sl || undefined };
-    // 필요 증거금: 신규 진입/추가분만 (반대매매 청산분은 증거금 불필요)
-    const openNotional = isOpening ? amt : Math.max(0, (q - (posCur?.qty || 0)) * refPx);
-    // 필요 예수금 = 증거금(명목/레버리지) + 진입 수수료. 수수료까지 예수금 안에서 감당돼야 함(잔고 음수 방지)
-    const feeCost = openNotional * (brand.feeRate || 0);
-    if (openNotional / leverage + feeCost > freeBase + 1e-6) return toastMsg("증거금 부족 (수수료 포함)");
-    const label = isOpening ? (orderDir === "long" ? "롱 진입" : "숏 진입") : (orderDir === "long" ? "숏 청산" : "롱 청산");
+    // 항상 진입 → 필요 예수금 = 증거금(명목/레버리지) + 수수료
+    const feeCost = amt * (brand.feeRate || 0);
+    if (amt / leverage + feeCost > freeBase + 1e-6) return toastMsg("증거금 부족 (수수료 포함)");
+    const label = orderDir === "long" ? "롱 진입" : "숏 진입";
     if (type === "market") {
-      setAcct((a) => applyFill(a, cur, side, q, p.px, leverage, "market", opts));
-      toastMsg(`시장가 ${label}${isOpening && leverage > 1 ? ` (${leverage}x)` : ""}`);
+      setAcct((a) => openFill(a, cur, side, q, p.px, leverage, "market", opts));
+      toastMsg(`시장가 ${label}${leverage > 1 ? ` (${leverage}x)` : ""}`);
     } else if (type === "limit") {
       setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), otype: "limit", sym: cur, side, qty: q, price: pr, leverage, ...opts }] }));
       toastMsg("지정가 주문 접수");
-    } else { // stop (조건부): 트리거가 현재가보다 위면 상향 돌파, 아래면 하향 돌파 대기
+    } else { // stop (조건부)
       const above = tr >= p.px;
       setAcct((a) => ({ ...a, openOrders: [...a.openOrders, { id: Date.now(), otype: "stop", sym: cur, side, qty: q, trigger: tr, above, leverage, ...opts }] }));
       toastMsg(`조건부 주문 접수 (${above ? "≥" : "≤"} ${tr})`);
@@ -265,16 +262,18 @@ function Trade({ sessionUid }) {
     setAmount(""); setTrigger(""); setTp(""); setSl("");
   }
   function cancel(id) { setAcct((a) => ({ ...a, openOrders: a.openOrders.filter((o) => o.id !== id) })); toastMsg("주문 취소"); }
-  function closePosition(sym) {
+  function closePosition(key) {
     setAcct((a) => {
-      const pos = (a.positions || {})[sym]; if (!pos) return a;
+      const pos = (a.positions || {})[key]; if (!pos) return a;
+      const sym = pos.sym || key.split("#")[0];
       const px = prices[sym]?.px ?? pos.entry;
-      return applyFill(a, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "market");
+      return closeFill(a, key, pos.qty, px, "market");
     });
     toastMsg("포지션 청산");
   }
-  function openShare(sym) {
-    const pos = (acct.positions || {})[sym]; if (!pos) return;
+  function openShare(key) {
+    const pos = (acct.positions || {})[key]; if (!pos) return;
+    const sym = pos.sym || key.split("#")[0];
     const px = prices[sym]?.px ?? pos.entry;
     const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
     const roe = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
@@ -977,90 +976,73 @@ const MM = 0.005; // 유지증거금 비율
  *  side 'sell' → 숏 증가 / 롱 감소·청산·반전
  * 마진은 진입 시 예수금에서 잠기고, 청산 시 실현손익과 함께 반환. 수수료 항상 차감.
  */
-function applyFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts = {}) {
+// 포지션 키: 한 코인에 롱·숏 동시 보유(양방향 헤지) → sym#side 로 구분
+function posKey(sym, side) { return sym + "#" + side; }
+
+/** 진입/추가(물타기) — 항상 해당 방향 포지션에 더한다. 반대 방향은 건드리지 않음(헤지). */
+function openFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts = {}) {
   const FEE = brand.feeRate || 0;
   const lev = Math.max(1, leverage || 1);
-  const positions = { ...(a.positions || {}) };
   const dir = side === "buy" ? "long" : "short";
+  const key = posKey(sym, dir);
+  const positions = { ...(a.positions || {}) };
+  const fee = qty * price * FEE;
+  let cash = a.cashUSDT - fee - (qty * price) / lev;
+  const margin = (qty * price) / lev;
+  const pos = positions[key];
+  const tp = opts.tp != null && opts.tp !== "" ? Number(opts.tp) : undefined;
+  const sl = opts.sl != null && opts.sl !== "" ? Number(opts.sl) : undefined;
+  if (!pos || pos.qty <= 1e-12) {
+    positions[key] = { sym, side: dir, qty, entry: price, margin, tp, sl };
+  } else {
+    const nq = pos.qty + qty;
+    positions[key] = { sym, side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin, tp: tp ?? pos.tp, sl: sl ?? pos.sl };
+  }
+  const rec = { sym, side, qty, price, fee, kind, dir, leverage: lev, t: Date.now() };
+  return { ...a, cashUSDT: cash, positions, realizedPnL: (a.realizedPnL || 0) - fee, history: [rec, ...a.history].slice(0, 200) };
+}
+
+/** 청산/감소 — 특정 포지션(key = sym#side)을 부분/전량 청산. */
+function closeFill(a, key, qty, price, kind = "market") {
+  const FEE = brand.feeRate || 0;
+  const positions = { ...(a.positions || {}) };
+  const pos = positions[key];
+  if (!pos || pos.qty <= 1e-12) return a;
+  const sym = pos.sym || key.split("#")[0];
   // 강제청산은 수수료 면제 → 손실이 정확히 증거금까지만(-100%), 계좌 음수 방지
   let fee = kind === "liquidation" ? 0 : qty * price * FEE;
   let cash = a.cashUSDT - fee;
-  let realizedGross = 0, closing = false, closedSide, closeEntry, closeLev, closeRoe;
-  const pos = positions[sym];
-  const tp = opts.tp != null && opts.tp !== "" ? Number(opts.tp) : undefined;
-  const sl = opts.sl != null && opts.sl !== "" ? Number(opts.sl) : undefined;
-
-  if (!pos || pos.qty <= 1e-12) {
-    // 신규 진입
-    const margin = (qty * price) / lev;
-    cash -= margin;
-    positions[sym] = { side: dir, qty, entry: price, margin, tp, sl };
-  } else if (pos.side === dir) {
-    // 같은 방향 추가
-    const margin = (qty * price) / lev;
-    cash -= margin;
-    const nq = pos.qty + qty;
-    positions[sym] = { side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin, tp: tp ?? pos.tp, sl: sl ?? pos.sl };
-  } else {
-    // 반대 방향: 감소/청산 (dust 스냅으로 미세 잔량 방지, 초과 시 반전)
-    closing = true;
-    closedSide = pos.side;
-    // 전량청산 스냅: 금액(USDT) 기반 청산은 체결 직전 가격변동으로 미세 잔량이 남을 수 있음.
-    // 포지션의 2% 또는 명목 $1 이내면 전량 청산으로 스냅 → "청산했는데 자산이 흔들림" 방지.
-    const dust = Math.max(pos.qty * 0.02, price > 0 ? 1 / price : 0);
-    const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
-    const marginReleased = pos.margin * (closeQty / pos.qty);
-    const rawPnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
-    // 청산 시 손실은 증거금까지만 (계좌 음수 방지, 최대 -100%)
-    const pnl = kind === "liquidation" ? Math.max(rawPnl, -marginReleased) : rawPnl;
-    cash += marginReleased + pnl;
-    realizedGross += pnl;
-    closeEntry = pos.entry;
-    closeLev = marginReleased > 0 ? Math.round((closeQty * pos.entry) / marginReleased) : 1;
-    closeRoe = marginReleased > 0 ? ((pnl - fee) / marginReleased) * 100 : 0;
-    const remain = pos.qty - closeQty;
-    if (remain > dust) {
-      positions[sym] = { side: pos.side, qty: remain, entry: pos.entry, margin: pos.margin - marginReleased, tp: pos.tp, sl: pos.sl };
-    } else {
-      delete positions[sym];
-      const flip = qty - closeQty;                       // 전량청산 스냅 시 flip<=0 → 반전 없음
-      if (flip > dust) {
-        const margin = (flip * price) / lev;
-        cash -= margin;
-        // 반전(flip) 포지션엔 주문 TP/SL을 붙이지 않는다: submit은 반전 시 TP/SL 방향을 검증하지 않아
-        // 이전 방향 기준 값이 넘어오면 즉시 오발동(즉시 청산)할 수 있음. 반전 후 별도 설정하도록 함.
-        positions[sym] = { side: dir, qty: flip, entry: price, margin };
-      }
-    }
-  }
-
-  // 현금 0 하한: 청산분 손실+수수료가 예수금을 초과하면 초과 수수료 면제(계좌 음수 방지, 정합성 유지)
-  if (closing && kind !== "liquidation" && cash < 0) { fee += cash; cash = 0; }
-  const rec = { sym, side, qty, price, fee, kind, t: Date.now() };
-  if (closing) { rec.reduce = true; rec.dir = closedSide; rec.realized = realizedGross - fee; rec.entry = closeEntry; rec.lev = closeLev; rec.roe = closeRoe; }
-  else { rec.dir = dir; rec.leverage = lev; }
-  return {
-    ...a, cashUSDT: cash, positions,
-    realizedPnL: (a.realizedPnL || 0) + (closing ? realizedGross : 0) - fee, // 수수료는 항상 실현손익에 반영 → 미실현+실현=총손익
-    history: [rec, ...a.history].slice(0, 200),
-  };
+  // 전량청산 스냅(가격변동으로 인한 미세 잔량 방지): 2% 또는 명목 $1 이내면 전량
+  const dust = Math.max(pos.qty * 0.02, price > 0 ? 1 / price : 0);
+  const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
+  const marginReleased = pos.margin * (closeQty / pos.qty);
+  const rawPnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
+  const pnl = kind === "liquidation" ? Math.max(rawPnl, -marginReleased) : rawPnl; // 손실 증거금 상한
+  cash += marginReleased + pnl;
+  const closeLev = marginReleased > 0 ? Math.round((closeQty * pos.entry) / marginReleased) : 1;
+  const remain = pos.qty - closeQty;
+  if (remain > dust) positions[key] = { ...pos, qty: remain, margin: pos.margin - marginReleased };
+  else delete positions[key];
+  // 현금 0 하한: 손실+수수료가 예수금 초과 시 초과 수수료 면제(계좌 음수 방지, 정합성 유지)
+  if (kind !== "liquidation" && cash < 0) { fee += cash; cash = 0; }
+  const closeRoe = marginReleased > 0 ? ((pnl - fee) / marginReleased) * 100 : 0;
+  const rec = { sym, side: pos.side === "long" ? "sell" : "buy", qty: closeQty, price, fee, kind, reduce: true, dir: pos.side, realized: pnl - fee, entry: pos.entry, lev: closeLev, roe: closeRoe, t: Date.now() };
+  return { ...a, cashUSDT: cash, positions, realizedPnL: (a.realizedPnL || 0) + pnl - fee, history: [rec, ...a.history].slice(0, 200) };
 }
 
-/** 청산 검사. isolated: 포지션별 마진 소진 시. cross: 계좌 순자산 ≤ 총 유지증거금 시 전량. */
+/** 청산 검사 — 각 포지션(롱/숏 각각) 손실이 증거금을 소진하면(≈-100%) 전량 청산. */
 function checkLiquidations(a, prices) {
-  // 모드 무관 포지션별 청산: 각 포지션 손실이 증거금을 소진하면(≈-100%) 전량 청산.
-  // → 어떤 포지션도 -100% 아래로 물리지 않고, 계좌가 음수로 빠지지 않음.
   let changed = false, na = a, liquidated = [];
-  for (const sym of Object.keys(na.positions || {})) {
-    const pos = na.positions[sym];
+  for (const key of Object.keys(na.positions || {})) {
+    const pos = na.positions[key];
     if (!pos || pos.qty <= 1e-12) continue;
-    // 실시간 가격이 도착한(live) 종목만 청산 검사 — 시드/스테일 가격으로 인한 오청산 방지
-    if (!prices[sym]?.live) continue;
+    const sym = pos.sym || key.split("#")[0];
+    if (!prices[sym]?.live) continue; // live 가격에서만(시드/스테일 오청산 방지)
     const px = prices[sym]?.px;
     if (px == null) continue;
     const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
     if (pos.margin + pnl <= pos.margin * MM) {
-      na = applyFill(na, sym, pos.side === "long" ? "sell" : "buy", pos.qty, px, 1, "liquidation");
+      na = closeFill(na, key, pos.qty, px, "liquidation");
       liquidated.push(sym); changed = true;
     }
   }
@@ -1114,7 +1096,8 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
           <tr><Td>USDT <span className="text-muted2">(예수금)</span></Td><Td>-</Td><Td cls="tabnum">{num(acct.cashUSDT)}</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td>-</Td><Td></Td></tr>
           {syms.map((s) => {
             const pos = positions[s];
-            const px = prices[s]?.px ?? pos.entry;
+            const sym = pos.sym || s.split("#")[0];
+            const px = prices[sym]?.px ?? pos.entry;
             const notional = pos.qty * pos.entry;
             const effLev = pos.margin > 0 ? notional / pos.margin : 1;
             const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
@@ -1123,7 +1106,7 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
             const liq = pos.side === "long" ? pos.entry - off : pos.entry + off;
             return (
               <tr key={s}>
-                <Td>{s}/USDT</Td>
+                <Td>{sym}/USDT</Td>
                 <Td cls={pos.side === "long" ? "text-up font-bold" : "text-down font-bold"}>{pos.side === "long" ? "롱" : "숏"}</Td>
                 <Td cls="tabnum">{num(pos.qty, 6)}</Td>
                 <Td cls="tabnum">{num(pos.entry)}</Td>
