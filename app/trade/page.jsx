@@ -1098,6 +1098,7 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
           {syms.map((s) => {
             const pos = positions[s];
             const sym = pos.sym || s.split("#")[0];
+            const dec = (brand.coins.find((x) => x.sym === sym) || {}).dec ?? 2; // 코인별 가격 소수점(저가코인 뭉개짐 방지)
             const px = prices[sym]?.live ? prices[sym].px : pos.entry; // 실시간 도착 전엔 진입가(손익 0)
             const notional = pos.qty * pos.entry;
             const effLev = pos.margin > 0 ? notional / pos.margin : 1;
@@ -1110,10 +1111,10 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
                 <Td>{sym}/USDT</Td>
                 <Td cls={pos.side === "long" ? "text-up font-bold" : "text-down font-bold"}>{pos.side === "long" ? "롱" : "숏"}</Td>
                 <Td cls="tabnum">{num(pos.qty, 6)}</Td>
-                <Td cls="tabnum">{num(pos.entry)}</Td>
-                <Td cls="tabnum">{num(px)}</Td>
+                <Td cls="tabnum">{num(pos.entry, dec)}</Td>
+                <Td cls="tabnum">{num(px, dec)}</Td>
                 <Td cls="tabnum">{effLev.toFixed(0)}x</Td>
-                <Td cls="tabnum text-down">{num(liq)}</Td>
+                <Td cls="tabnum text-down">{num(liq, dec)}</Td>
                 <Td cls="tabnum text-[10px] text-muted2">{pos.tp ? "TP" : ""}{pos.tp && pos.sl ? "/" : ""}{pos.sl ? "SL" : ""}{!pos.tp && !pos.sl ? "-" : ""}</Td>
                 <Td cls={`tabnum font-bold ${pnl >= 0 ? "text-up" : "text-down"}`}>{pnl >= 0 ? "+" : ""}{num(pnl)} <span className="text-[10px]">({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)</span></Td>
                 <Td>
