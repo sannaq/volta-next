@@ -97,7 +97,7 @@ function Trade({ sessionUid }) {
         // 지정가/조건부는 항상 진입(헤지: 매수=롱, 매도=숏). 체결 시점 예수금 재검증 → 음수 방지.
         const notional = o.qty * px, lev = Math.max(1, o.leverage || 1);
         if (notional / lev + notional * feeRate > na.cashUSDT + 1e-6) { keep.push(o); continue; }
-        na = openFill(na, o.sym, o.side, o.qty, px, o.leverage || 1, o.otype === "stop" ? "stop" : "limit", { tp: o.tp, sl: o.sl });
+        na = openFill(na, o.sym, o.side, o.qty, px, o.leverage || 1, o.otype === "stop" ? "stop" : "limit", { tp: o.tp, sl: o.sl, mode: o.mode });
       }
       na = { ...na, openOrders: keep };
       return na;
@@ -243,7 +243,7 @@ function Trade({ sessionUid }) {
         if (sl && +sl <= refPx) return toastMsg("숏 손절가는 진입가보다 높아야 합니다");
       }
     }
-    const opts = { tp: tp || undefined, sl: sl || undefined };
+    const opts = { tp: tp || undefined, sl: sl || undefined, mode: marginMode };
     // 항상 진입 → 필요 예수금 = 증거금(명목/레버리지) + 수수료
     const feeCost = amt * (brand.feeRate || 0);
     if (amt / leverage + feeCost > freeBase + 1e-6) return toastMsg("증거금 부족 (수수료 포함)");
@@ -994,11 +994,12 @@ function openFill(a, sym, side, qty, price, leverage = 1, kind = "market", opts 
   const pos = positions[key];
   const tp = opts.tp != null && opts.tp !== "" ? Number(opts.tp) : undefined;
   const sl = opts.sl != null && opts.sl !== "" ? Number(opts.sl) : undefined;
+  const mode = opts.mode === "cross" ? "cross" : "isolated";
   if (!pos || pos.qty <= 1e-12) {
-    positions[key] = { sym, side: dir, qty, entry: price, margin, tp, sl };
+    positions[key] = { sym, side: dir, qty, entry: price, margin, tp, sl, mode };
   } else {
     const nq = pos.qty + qty;
-    positions[key] = { sym, side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin, tp: tp ?? pos.tp, sl: sl ?? pos.sl };
+    positions[key] = { sym, side: dir, qty: nq, entry: (pos.entry * pos.qty + price * qty) / nq, margin: pos.margin + margin, tp: tp ?? pos.tp, sl: sl ?? pos.sl, mode: pos.mode || mode };
   }
   const rec = { sym, side, qty, price, fee, kind, dir, leverage: lev, t: Date.now() };
   return { ...a, cashUSDT: cash, positions, realizedPnL: (a.realizedPnL || 0) - fee, history: [rec, ...a.history].slice(0, 200) };
@@ -1011,42 +1012,62 @@ function closeFill(a, key, qty, price, kind = "market") {
   const pos = positions[key];
   if (!pos || pos.qty <= 1e-12) return a;
   const sym = pos.sym || key.split("#")[0];
-  // 강제청산은 수수료 면제 → 손실이 정확히 증거금까지만(-100%), 계좌 음수 방지
-  let fee = kind === "liquidation" ? 0 : qty * price * FEE;
+  const isLiq = kind === "liquidation" || kind === "liquidation-cross"; // 강제청산은 수수료 면제
+  let fee = isLiq ? 0 : qty * price * FEE;
   let cash = a.cashUSDT - fee;
   // 전량청산 스냅(가격변동으로 인한 미세 잔량 방지): 2% 또는 명목 $1 이내면 전량
   const dust = Math.max(pos.qty * 0.02, price > 0 ? 1 / price : 0);
   const closeQty = qty >= pos.qty - dust ? pos.qty : qty;
   const marginReleased = pos.margin * (closeQty / pos.qty);
   const rawPnl = (pos.side === "long" ? (price - pos.entry) : (pos.entry - price)) * closeQty;
-  const pnl = kind === "liquidation" ? Math.max(rawPnl, -marginReleased) : rawPnl; // 손실 증거금 상한
-  cash += marginReleased + pnl;
+  // 격리 강제청산만 손실을 증거금까지 상한(-100%). 크로스 청산은 계좌 전액이 담보라 상한 없음(아래 현금 0 하한으로 계좌 음수만 방지).
+  const pnl0 = kind === "liquidation" ? Math.max(rawPnl, -marginReleased) : rawPnl;
+  cash += marginReleased + pnl0;
   const closeLev = marginReleased > 0 ? Math.round((closeQty * pos.entry) / marginReleased) : 1;
   const remain = pos.qty - closeQty;
   if (remain > dust) positions[key] = { ...pos, qty: remain, margin: pos.margin - marginReleased };
   else delete positions[key];
-  // 현금 0 하한: 손실+수수료가 예수금 초과 시 초과 수수료 면제(계좌 음수 방지, 정합성 유지)
-  if (kind !== "liquidation" && cash < 0) { fee += cash; cash = 0; }
-  const closeRoe = marginReleased > 0 ? ((pnl - fee) / marginReleased) * 100 : 0;
-  const rec = { sym, side: pos.side === "long" ? "sell" : "buy", qty: closeQty, price, fee, kind, reduce: true, dir: pos.side, realized: pnl - fee, entry: pos.entry, lev: closeLev, roe: closeRoe, t: Date.now() };
-  return { ...a, cashUSDT: cash, positions, realizedPnL: (a.realizedPnL || 0) + pnl - fee, history: [rec, ...a.history].slice(0, 200) };
+  // 현금 0 하한: 손실(+수수료)이 예수금 초과 시 흡수(계좌 음수 방지, 정합성 유지)
+  let realized = pnl0;
+  if (cash < 0) { realized += -cash; cash = 0; }
+  const closeRoe = marginReleased > 0 ? ((realized - fee) / marginReleased) * 100 : 0;
+  const rec = { sym, side: pos.side === "long" ? "sell" : "buy", qty: closeQty, price, fee, kind, reduce: true, dir: pos.side, realized: realized - fee, entry: pos.entry, lev: closeLev, roe: closeRoe, t: Date.now() };
+  return { ...a, cashUSDT: cash, positions, realizedPnL: (a.realizedPnL || 0) + realized - fee, history: [rec, ...a.history].slice(0, 200) };
 }
 
-/** 청산 검사 — 각 포지션(롱/숏 각각) 손실이 증거금을 소진하면(≈-100%) 전량 청산. */
+/**
+ * 청산 검사.
+ *  - 격리(isolated): 각 포지션 손실이 증거금을 소진하면(≈-100%) 전량 청산. 손실은 증거금까지만.
+ *  - 크로스(cross): 크로스 포지션들이 계좌 현금을 공유 담보로 씀 → 크로스 순자산이 유지증거금 이하로
+ *    떨어질 때만 청산(가장 손실 큰 것부터 부분청산, 건전해질 때까지 반복). 잔고가 많으면 훨씬 안 터짐.
+ */
 function checkLiquidations(a, prices) {
   let changed = false, na = a, liquidated = [];
+  const liveKey = (key) => { const p = na.positions[key]; const s = p && (p.sym || key.split("#")[0]); return p && p.qty > 1e-12 && prices[s]?.live && prices[s]?.px != null; };
+  const mkOf = (key) => { const p = na.positions[key]; return prices[p.sym || key.split("#")[0]].px; };
+  const pnlOf = (key) => { const p = na.positions[key]; const px = mkOf(key); return (p.side === "long" ? (px - p.entry) : (p.entry - px)) * p.qty; };
+
+  // 1) 격리 포지션: 각자 -100%
   for (const key of Object.keys(na.positions || {})) {
     const pos = na.positions[key];
-    if (!pos || pos.qty <= 1e-12) continue;
-    const sym = pos.sym || key.split("#")[0];
-    if (!prices[sym]?.live) continue; // live 가격에서만(시드/스테일 오청산 방지)
-    const px = prices[sym]?.px;
-    if (px == null) continue;
-    const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
-    if (pos.margin + pnl <= pos.margin * MM) {
-      na = closeFill(na, key, pos.qty, px, "liquidation");
-      liquidated.push(sym); changed = true;
+    if (!pos || pos.qty <= 1e-12 || pos.mode === "cross") continue;
+    if (!liveKey(key)) continue;
+    if (pos.margin + pnlOf(key) <= pos.margin * MM) {
+      na = closeFill(na, key, pos.qty, mkOf(key), "liquidation");
+      liquidated.push(pos.sym || key.split("#")[0]); changed = true;
     }
+  }
+  // 2) 크로스 포지션: 계좌 풀 기준 부분청산 루프(연쇄 무한루프 방지 guard)
+  for (let guard = 0; guard < 60; guard++) {
+    const keys = Object.keys(na.positions).filter((k) => na.positions[k].mode === "cross" && liveKey(k));
+    if (!keys.length) break;
+    let crossMargin = 0, crossUpnl = 0, worst = null, worstPnl = Infinity;
+    for (const k of keys) { crossMargin += na.positions[k].margin; const pl = pnlOf(k); crossUpnl += pl; if (pl < worstPnl) { worstPnl = pl; worst = k; } }
+    const crossEquity = na.cashUSDT + crossMargin + crossUpnl; // 현금(공유담보) + 크로스증거금 + 크로스미실현
+    if (crossEquity > crossMargin * MM) break; // 건전 → 청산 없음
+    const pos = na.positions[worst];
+    na = closeFill(na, worst, pos.qty, mkOf(worst), "liquidation-cross"); // 가장 손실 큰 것부터 청산
+    liquidated.push(pos.sym || worst.split("#")[0]); changed = true;
   }
   return { wallet: na, changed, liquidated };
 }
@@ -1105,8 +1126,10 @@ function PosTable({ acct, prices, summary, onClose, onShare }) {
             const effLev = pos.margin > 0 ? notional / pos.margin : 1;
             const pnl = (pos.side === "long" ? (px - pos.entry) : (pos.entry - px)) * pos.qty;
             const pnlPct = pos.margin > 0 ? (pnl / pos.margin) * 100 : 0;
-            const off = pos.qty > 0 ? (pos.margin * 0.995) / pos.qty : 0;
-            const liq = pos.side === "long" ? pos.entry - off : pos.entry + off;
+            // 청산가: 격리=증거금 소진, 크로스=증거금+남은현금(공유담보)까지 버팀 → 훨씬 멀어짐
+            const cushion = pos.margin * 0.995 + (pos.mode === "cross" ? Math.max(0, acct.cashUSDT) : 0);
+            const off = pos.qty > 0 ? cushion / pos.qty : 0;
+            const liq = pos.side === "long" ? Math.max(0, pos.entry - off) : pos.entry + off;
             return (
               <tr key={s}>
                 <Td>{sym}/USDT</Td>
